@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+// Import Donor model
+const Donor = require('../models/Donor');
+
 // ADD THIS TEST ENDPOINT AT THE TOP
 router.get('/test', (req, res) => {
   res.json({
@@ -10,6 +13,117 @@ router.get('/test', (req, res) => {
     timestamp: new Date()
   });
 });
+
+// Get all available donors with their information
+router.get('/available-donors', async (req, res) => {
+  try {
+    console.log('=== FETCHING AVAILABLE DONORS ===');
+    
+    // Get all donors from the donors collection
+    const donors = await Donor.find({}).sort({ createdAt: -1 });
+    console.log('Donors found:', donors.length);
+    
+    // Get recent location data to match with donors
+    const locations = await mongoose.connection.db.collection('locations').find({}).toArray();
+    console.log('Locations found:', locations.length);
+    
+    // Combine donor data with location data
+    const availableDonors = donors.map(donor => {
+      // Try to find matching location by multiple criteria for better matching
+      const location = locations.find(loc => {
+        // Match by phone number (most reliable)
+        const phoneMatch = loc.mobileNumber === donor.phone || 
+                          loc.mobileNumber === donor.phone.replace(/\s+/g, '') ||
+                          loc.mobileNumber?.replace(/\s+/g, '') === donor.phone.replace(/\s+/g, '');
+        
+        // Match by name (case insensitive, flexible matching)
+        const nameMatch = loc.userName && donor.name && 
+                         loc.userName.toLowerCase().trim() === donor.name.toLowerCase().trim();
+        
+        return phoneMatch || nameMatch;
+      });
+      
+      // Calculate distance if location is available
+      let distance = null;
+      let detailedStatus = 'not_contacted'; // Default status
+      
+      if (location && location.latitude && location.longitude) {
+        const hospitalLat = 22.6013;
+        const hospitalLng = 72.8327;
+        distance = calculateDistance(hospitalLat, hospitalLng, location.latitude, location.longitude);
+        detailedStatus = 'location_shared';
+      }
+      
+      // Determine status based on location sharing
+      let status = 'available';
+      if (location) {
+        status = 'responded'; // Has shared location via SMS link
+      }
+      
+      return {
+        id: donor._id,
+        name: donor.name,
+        email: donor.email,
+        phone: donor.phone,
+        bloodGroup: donor.bloodGroup,
+        rollNo: donor.rollNo,
+        status: status,
+        detailedStatus: detailedStatus, // More specific status
+        distance: distance,
+        lastDonation: null, // This would need to be tracked separately
+        address: location ? location.address : null,
+        location: location ? {
+          lat: location.latitude,
+          lng: location.longitude
+        } : null,
+        responseTime: location ? location.timestamp : null,
+        hasLocationData: !!location, // Boolean flag for easier filtering
+        matchedBy: location ? (locations.find(l => l.mobileNumber === donor.phone) ? 'phone' : 'name') : null
+      };
+    });
+    
+    // Sort donors: those with location data first, then by distance, then by name
+    availableDonors.sort((a, b) => {
+      if (a.hasLocationData && !b.hasLocationData) return -1;
+      if (!a.hasLocationData && b.hasLocationData) return 1;
+      if (a.distance !== null && b.distance !== null) {
+        return a.distance - b.distance;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    
+    console.log('Available donors processed:', availableDonors.length);
+    console.log('Donors with location:', availableDonors.filter(d => d.hasLocationData).length);
+    
+    res.json({
+      success: true,
+      donors: availableDonors,
+      total: availableDonors.length,
+      withLocation: availableDonors.filter(d => d.hasLocationData).length,
+      withoutLocation: availableDonors.filter(d => !d.hasLocationData).length
+    });
+    
+  } catch (error) {
+    console.error('Error fetching available donors:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching available donors',
+      error: error.message
+    });
+  }
+});
+
+// Helper function to calculate distance
+function calculateDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371; // Radius of the Earth in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng/2) * Math.sin(dLng/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; // Distance in kilometers
+}
 
 // Create a model for the locations collection
 const LocationSchema = new mongoose.Schema({

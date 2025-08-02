@@ -213,9 +213,7 @@ export function LiveMap() {
 
   // Get distance category for display
   const getDistanceCategory = (distance: number): { label: string; color: string } => {
-    if (distance < 2) return { label: 'Very Close', color: 'text-green-600' };
-    if (distance < 5) return { label: 'Close', color: 'text-blue-600' };
-    if (distance < 10) return { label: 'Nearby', color: 'text-yellow-600' };
+    if (distance <= 5) return { label: 'Near', color: 'text-green-600' };
     return { label: 'Far', color: 'text-red-600' };
   };
 
@@ -592,21 +590,17 @@ export function LiveMap() {
 
                 {/* Distance Legend */}
                 <div className="flex items-center space-x-4">
-                  <div className="flex items-center space-x-1">
-                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">&lt;2km</span>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow-sm"></div>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Near (≤5km)</span>
                   </div>
-                  <div className="flex items-center space-x-1">
-                    <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">2-5km</span>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 rounded-full bg-red-500 border-2 border-white shadow-sm"></div>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Far (&gt;5km)</span>
                   </div>
-                  <div className="flex items-center space-x-1">
-                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">5-10km</span>
-                  </div>
-                  <div className="flex items-center space-x-1">
-                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                    <span className="text-xs text-gray-600 dark:text-gray-400">&gt;10km</span>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-red-600 rounded border-2 border-white shadow-sm flex items-center justify-center text-xs">🏥</div>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Hospital</span>
                   </div>
                 </div>
               </div>
@@ -625,7 +619,8 @@ export function LiveMap() {
                   lat: d.lat || 0,
                   lng: d.lng || 0,
                   bloodGroup: d.bloodGroup || 'Unknown',
-                  seen: true
+                  seen: true,
+                  distance: d.distance // Add distance to map donors
                 }));
                 
                 console.log('Map donors being passed to CharusatMap:', mapDonors);
@@ -697,10 +692,7 @@ export function LiveMap() {
                       </div>
                       <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
                         <span className="font-medium text-blue-600 dark:text-blue-400">ID: {donor.donorId}</span>
-                        <span className={`text-xs px-2 py-1 rounded-full ${distanceInfo.color.includes('green') ? 'bg-green-100 text-green-800' : 
-                          distanceInfo.color.includes('blue') ? 'bg-blue-100 text-blue-800' :
-                          distanceInfo.color.includes('yellow') ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-red-100 text-red-800'}`}>
+                        <span className={`text-xs px-2 py-1 rounded-full ${distanceInfo.color.includes('green') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                           {distanceInfo.label}
                         </span>
                       </div>
@@ -749,10 +741,20 @@ export function LiveMap() {
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Nearby (2-10km)</p>
-              <p className="text-2xl font-bold text-blue-600">{filteredDonors.filter(d => d.distance >= 2 && d.distance <= 10).length}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Near (≤5km)</p>
+              <p className="text-2xl font-bold text-green-600">{filteredDonors.filter(d => d.distance <= 5).length}</p>
             </div>
-            <div className="w-8 h-8 rounded-full bg-blue-500"></div>
+            <div className="w-8 h-8 rounded-full bg-green-500"></div>
+          </div>
+        </div>
+        
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Far (&gt;5km)</p>
+              <p className="text-2xl font-bold text-red-600">{filteredDonors.filter(d => d.distance > 5).length}</p>
+            </div>
+            <div className="w-8 h-8 rounded-full bg-red-500"></div>
           </div>
         </div>
         
