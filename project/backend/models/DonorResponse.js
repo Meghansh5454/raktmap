@@ -1,31 +1,23 @@
-const express = require('express');
-const router = express.Router();
-const DonorResponse = require('../models/DonorResponse');
-
-// Get donor responses for a specific blood request
-router.get('/responses/:requestId', async (req, res) => {
+router.get('/responses/:requestId/last/:bloodGroup', async (req, res) => {
   try {
-    const { requestId } = req.params;
-    
-    console.log('Fetching responses for requestId:', requestId);
-    
-    const responses = await DonorResponse.find({ requestId })
+    const { requestId, bloodGroup } = req.params;
+    const lastResponse = await DonorResponse.findOne({ requestId, bloodGroup })
       .sort({ responseTime: -1 });
-    
-    console.log(`Found ${responses.length} responses for request ${requestId}`);
-    
+    if (!lastResponse) {
+      return res.status(404).json({
+        success: false,
+        message: 'No responses found for this request and blood group'
+      });
+    }
     res.json({
       success: true,
-      responses
+      response: lastResponse
     });
   } catch (error) {
-    console.error('Error fetching donor responses:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch donor responses',
+      message: 'Failed to fetch last donor response',
       error: error.message
     });
   }
 });
-
-module.exports = router;
