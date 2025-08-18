@@ -12,10 +12,9 @@ const donorResponseRouter = require('./routes/donorResponse');
 const donorsRouter = require('./routes/donors');
 
 const app = express();
-app.use(cors({ origin: ['http://localhost:5173','http://localhost:5174'], credentials: true }));
+app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
 app.use(bodyParser.json());
 
-// 1. Connect to MongoDB using environment variables
 const mongoOptions = {
   retryWrites: true,
   w: 'majority',
@@ -24,12 +23,10 @@ const mongoOptions = {
   family: 4 // Force IPv4
 };
 
-// Get MongoDB URI from environment variables
 const connectionString = process.env.MONGODB_URI;
 
 if (!connectionString) {
   console.error('❌ MONGODB_URI not found in environment variables');
-  console.log('Please add MONGODB_URI to your .env file');
   process.exit(1);
 }
 
@@ -38,18 +35,25 @@ mongoose.connect(connectionString, mongoOptions)
   .catch(err => {
     console.error('MongoDB connection error:', err.message);
     console.log('📋 Troubleshooting steps:');
-    console.log('1. Check MongoDB Atlas Network Access - Add IP: 136.233.130.145');
-    console.log('2. Or temporarily allow all IPs: 0.0.0.0/0');
-    console.log('3. Verify cluster is running and not paused');
-    console.log('4. Check if antivirus/firewall is blocking connection');
-    console.log('5. Make sure MONGODB_URI is set in .env file');
+    console.log('1. Check MongoDB Atlas Network Access - Add your IP');
+    console.log('2. Or allow all IPs: 0.0.0.0/0');
+    console.log('3. Verify cluster is running');
+    console.log('4. Check firewall/antivirus');
+    console.log('5. Make sure MONGODB_URI is correct in .env');
   });
 
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'MongoDB connection error:'));
-db.once('open', () => console.log('✅ MongoDB connected to raktmap database successfully!'));
+db.once('open', () => console.log('✅ MongoDB connected successfully!'));
 
-// Middleware to protect routes
+/* ============================
+   2. JWT Secret
+============================ */
+const SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
+
+/* ============================
+   3. Auth Middleware
+============================ */
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -62,11 +66,11 @@ function authenticateToken(req, res, next) {
   });
 }
 
-const SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
-
-// Use routes - MOVE THIS AFTER AUTHENTICATETOKEN FUNCTION
+/* ============================
+   4. Routes
+============================ */
 app.use('/blood-requests', authenticateToken, bloodRequestsRouter);
-app.use('/donor-response', donorResponseRouter); // This line was missing the middleware setup
+app.use('/donor-response', authenticateToken, donorResponseRouter);
 app.use('/donors', authenticateToken, donorsRouter);
 
 // Public route for donation history
@@ -76,32 +80,28 @@ app.get('/donation-history', async (req, res) => {
     const bloodRequests = await BloodRequest.find({})
       .sort({ createdAt: -1 })
       .select('_id bloodGroup quantity urgency status createdAt requiredBy description');
-    
-    res.json({
-      success: true,
-      bloodRequests
-    });
+
+    res.json({ success: true, bloodRequests });
   } catch (error) {
     console.error('Error fetching donation history:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch donation history'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch donation history' });
   }
 });
 
-// 2. Define User schema/model
-
-// 3. Registration endpoint
+/* ============================
+   5. Register
+============================ */
 app.post('/register', async (req, res) => {
   try {
     console.log("Received /register request", req.body);
     let { email, password, role, name } = req.body;
+
     if (!email || !password || !role || !name) {
-      console.error("Missing required fields:", req.body);
       return res.status(400).json({ message: 'All fields required' });
     }
+
     email = email.toLowerCase();
+    role = role.toLowerCase();
 
     let Model;
     if (role === 'hospital') {
@@ -109,19 +109,18 @@ app.post('/register', async (req, res) => {
     } else if (role === 'admin') {
       Model = Admin;
     } else {
-      console.error("Invalid role:", role);
       return res.status(400).json({ message: 'Invalid role' });
     }
 
     const existing = await Model.findOne({ email });
     if (existing) {
-      console.error("User already exists:", email);
       return res.status(409).json({ message: 'User already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new Model({ email, password: hashedPassword, name });
     await user.save();
+
     res.status(201).json({ message: `${role.charAt(0).toUpperCase() + role.slice(1)} registered successfully` });
   } catch (err) {
     console.error("Registration error:", err);
@@ -129,37 +128,51 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// 4. Login endpoint
+/* ============================
+   6. Login
+============================ */
 app.post('/login', async (req, res) => {
-  let { email, password, role } = req.body;
-  email = email.toLowerCase();
+  try {
+    let { email, password, role } = req.body;
+    email = email.toLowerCase();
+    role = role.toLowerCase();
 
-  let Model;
-  if (role === 'hospital') {
-    Model = Hospital;
-  } else if (role === 'admin') {
-    Model = Admin;
-  } else {
-    return res.status(400).json({ message: 'Invalid role' });
+    let Model;
+    if (role === 'hospital') {
+      Model = Hospital;
+    } else if (role === 'admin') {
+      Model = Admin;
+    } else {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+
+    const user = await Model.findOne({ email });
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
+
+    const token = jwt.sign(
+      { id: user._id, email: user.email, role: role, name: user.name },
+      SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({ token, role, name: user.name });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ message: "Login failed. Please try again." });
   }
-
-  const user = await Model.findOne({ email });
-  if (!user) return res.status(401).json({ message: 'Invalid credentials' });
-
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
-
-  const token = jwt.sign(
-    { id: user._id, email: user.email, role: role, name: user.name },
-    SECRET,
-    { expiresIn: '1h' }
-  );
-  res.json({ token, role: role, name: user.name });
 });
 
-// Example protected route
+/* ============================
+   7. Example Protected Route
+============================ */
 app.get('/dashboard', authenticateToken, (req, res) => {
   res.json({ message: `Welcome, ${req.user.email}!`, role: req.user.role });
 });
 
-app.listen(5000, () => console.log('Server running on port 5000'));
+/* ============================
+   8. Start Server
+============================ */
+app.listen(5000, () => console.log('🚀 Server running on port 5000'));
