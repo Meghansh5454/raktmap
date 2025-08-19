@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const BloodRequest = require('../models/BloodRequest');
 const Donor = require('../models/Donor'); // Ensure this line is present
+const ResponseToken = require('../models/ResponseToken');
 const { sendSMS } = require('../services/smsService');
 
 // Create a new blood request
@@ -50,20 +51,26 @@ router.post('/', async (req, res) => {
 
     console.log(`Found ${matchingDonors.length} matching donors for blood group ${bloodGroup}`);
 
-    // Prepare SMS message
-    let message = `URGENT: ${bloodGroup} blood needed at ${hospital.name}.\n`;
-    message += `Units needed: ${quantity}\n`;
-    message += `Urgency: ${urgency}\n`;
-    if (description) message += `Details: ${description}\n`;
-    message += `https://f61l7162-3001.inc1.devtunnels.ms/`;
-
-    // Send SMS to each matching donor
+    // Prepare SMS message with token-based tracking
     let smsSuccessCount = 0;
     for (const donor of matchingDonors) {
       const donorName = donor["Student Name"] || donor.name || '[no name]';
       const donorPhone = donor["Mobile No"] || donor.phone;
       if (donorPhone) {
         try {
+          // Generate short token for tracking
+          const responseToken = Math.random().toString(36).substr(2, 8);
+          
+          // Store token mapping in database for tracking
+          await ResponseToken.create({
+            token: responseToken,
+            requestId: bloodRequest._id,
+            donorId: donor._id || donor["Student Name"] || donorPhone // Use available ID
+          });
+          
+          // Create improved SMS message
+          const message = `Urgent: ${quantity} units ${bloodGroup} needed at ${hospital.name}. Respond: https://donor-location-tracker.onrender.com/r/${responseToken}`;
+          
           await sendSMS(donorPhone, message);
           smsSuccessCount++;
           console.log(`SMS sent successfully to donor: ${donorName} (${donorPhone})`);

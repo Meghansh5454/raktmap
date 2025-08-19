@@ -9,6 +9,7 @@ interface DonorResponse {
   name: string;
   phone: string;
   donorId: string;
+  bloodGroup?: string;
   location: {
     lat: number;
     lng: number;
@@ -39,6 +40,24 @@ export function LiveMap() {
 
   // Hospital location (Charusat University) - UPDATED TO CORRECT COORDINATES
   const hospitalLocation = { lat: 22.6013, lng: 72.8327 };
+
+  // Blood group compatibility function - FIXED LOGIC
+  const getCompatibleBloodGroups = (requestedBloodGroup: string): string[] => {
+    // This returns which donor blood groups can give to the requested blood group
+    const compatibility: { [key: string]: string[] } = {
+      'A+': ['A+', 'A-', 'O+', 'O-'],        // A+ can receive from A+, A-, O+, O-
+      'A-': ['A-', 'O-'],                     // A- can receive from A-, O-
+      'B+': ['B+', 'B-', 'O+', 'O-'],        // B+ can receive from B+, B-, O+, O-
+      'B-': ['B-', 'O-'],                     // B- can receive from B-, O-
+      'AB+': ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'], // AB+ can receive from everyone (universal recipient)
+      'AB-': ['A-', 'B-', 'AB-', 'O-'],      // AB- can receive from A-, B-, AB-, O-
+      'O+': ['O+', 'O-'],                     // O+ can receive from O+, O-
+      'O-': ['O-']                            // O- can only receive from O- (universal donor to others, but restrictive recipient)
+    };
+    
+    console.log(`Blood compatibility for ${requestedBloodGroup}:`, compatibility[requestedBloodGroup] || []);
+    return compatibility[requestedBloodGroup] || [];
+  };
 
   // Fetch blood requests from hospital
   const fetchBloodRequests = async () => {
@@ -184,6 +203,46 @@ export function LiveMap() {
     }
   };
 
+  // Test specific API endpoint function
+  const testSpecificRequest = async () => {
+    try {
+      console.log('=== TESTING SPECIFIC REQUEST API ===');
+      const requestId = '68a47ea630f9050be02bc4b5'; // The ID from your SMS
+      setDebugInfo(prev => prev + `\n🧪 Testing API for request: ${requestId}`);
+      
+      const response = await axios.get(`http://localhost:5000/donor-response/responses/${requestId}`);
+      console.log('Direct API Response:', response);
+      console.log('Response Data:', response.data);
+      
+      if (response.data && response.data.success) {
+        const responses = response.data.responses || [];
+        console.log('Parsed responses:', responses);
+        setDebugInfo(prev => prev + `\n✅ Direct API test successful: ${responses.length} responses`);
+        
+        // Log each response details
+        responses.forEach((resp: any, index: number) => {
+          console.log(`Response ${index + 1}:`, {
+            name: resp.name,
+            bloodGroup: resp.bloodGroup,
+            location: resp.location,
+            phone: resp.phone,
+            status: resp.status
+          });
+          setDebugInfo(prev => prev + `\n  • ${resp.name} (${resp.bloodGroup}) at [${resp.location?.lat}, ${resp.location?.lng}]`);
+        });
+        
+        // Manually set the responses to see if it displays
+        setDonorResponses(responses);
+        setSelectedRequest(requestId);
+      } else {
+        setDebugInfo(prev => prev + `\n❌ API test failed: ${response.data?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      console.error('Direct API test error:', error);
+      setDebugInfo(prev => prev + `\n❌ API test error: ${error.message}`);
+    }
+  };
+
   // Test API endpoint
   const testApiConnection = async () => {
     try {
@@ -299,7 +358,7 @@ export function LiveMap() {
     console.log('Donors with distance:', donorsWithDistance);
     console.log('Filtered donors:', filteredDonors);
     console.log('Hospital location:', hospitalLocation);
-    console.log('Current filters:', { radiusFilter, selectedStatus });
+    console.log('Current filters:', { radiusFilter, selectedStatus, selectedRequest });
     
     // Test with a specific location
     if (donorResponses.length > 0) {
@@ -311,8 +370,26 @@ export function LiveMap() {
           firstDonor.location.lat, firstDonor.location.lng
         );
         console.log('Test distance calculation:', testDistance);
+        console.log('Distance under radius?', testDistance <= radiusFilter);
       }
     }
+    
+    // Debug the actual blood request
+    const selectedBloodRequest = bloodRequests.find(req => req._id === selectedRequest);
+    console.log('Selected blood request:', selectedBloodRequest);
+    
+    // Debug compatibility for each donor
+    donorResponses.forEach((donor, index) => {
+      console.log(`--- Donor ${index + 1}: ${donor.name} ---`);
+      console.log('Donor blood group:', donor.bloodGroup);
+      console.log('Request blood group:', selectedBloodRequest?.bloodGroup);
+      if (selectedBloodRequest && selectedRequest !== 'all-locations') {
+        const compatibleGroups = getCompatibleBloodGroups(selectedBloodRequest.bloodGroup);
+        const isCompatible = compatibleGroups.includes(donor.bloodGroup || 'Unknown');
+        console.log('Compatible groups:', compatibleGroups);
+        console.log('Is compatible?', isCompatible);
+      }
+    });
   };
 
   // Force test users function - UPDATED COORDINATES
@@ -382,7 +459,7 @@ export function LiveMap() {
     }
   }, [selectedRequest]);
 
-  // Add distance to donor responses
+  // Add distance and blood group compatibility filtering to donor responses
   const donorsWithDistance = donorResponses.map((donor) => {
     const selectedBloodRequest = bloodRequests.find(req => req._id === selectedRequest);
     const bloodGroup = selectedBloodRequest ? selectedBloodRequest.bloodGroup : 'Unknown';
@@ -394,21 +471,36 @@ export function LiveMap() {
     ) : 0;
     
     // Add debug logging for each donor
-    console.log('=== DONOR DISTANCE DEBUG ===');
+    console.log('=== DONOR PROCESSING DEBUG ===');
     console.log('Donor:', donor.name);
+    console.log('Donor blood group:', donor.bloodGroup || 'Unknown');
+    console.log('Requested blood group:', bloodGroup);
     console.log('Donor location:', donor.location);
     console.log('Hospital location:', hospitalLocation);
     console.log('Calculated distance:', distance);
     console.log('Current radius filter:', radiusFilter);
-    console.log('Will be included?', distance <= radiusFilter);
+    console.log('Distance filter passed?', distance <= radiusFilter);
+    
+    // Check blood group compatibility if a specific request is selected
+    let isCompatible = true;
+    if (selectedRequest && selectedRequest !== 'all-locations' && selectedBloodRequest) {
+      const compatibleGroups = getCompatibleBloodGroups(selectedBloodRequest.bloodGroup);
+      const donorBloodGroup = donor.bloodGroup || 'Unknown';
+      isCompatible = compatibleGroups.includes(donorBloodGroup);
+      console.log('Compatible blood groups for', selectedBloodRequest.bloodGroup, ':', compatibleGroups);
+      console.log('Donor blood group:', donorBloodGroup);
+      console.log('Is compatible?', isCompatible);
+    }
     
     return {
       ...donor,
       id: donor._id,
       lat: donor.location?.lat || 0,
       lng: donor.location?.lng || 0,
-      bloodGroup: bloodGroup === 'All Users' ? 'Unknown' : bloodGroup,
-      distance: distance
+      bloodGroup: donor.bloodGroup || 'Unknown',
+      requestedBloodGroup: bloodGroup === 'All Users' ? 'Unknown' : bloodGroup,
+      distance: distance,
+      isCompatible: isCompatible
     };
   });
 
@@ -423,9 +515,15 @@ export function LiveMap() {
     const withinRadius = donor.distance <= radiusFilter;
     const matchesStatus = selectedStatus === 'all' || donor.status === selectedStatus;
     
-    console.log(`Donor ${donor.name}: distance=${donor.distance.toFixed(2)}km, withinRadius=${withinRadius}, matchesStatus=${matchesStatus}`);
+    // Add blood group compatibility check
+    let isBloodGroupCompatible = true;
+    if (selectedRequest && selectedRequest !== 'all-locations') {
+      isBloodGroupCompatible = donor.isCompatible;
+    }
     
-    return withinRadius && matchesStatus;
+    console.log(`Donor ${donor.name}: distance=${donor.distance.toFixed(2)}km, withinRadius=${withinRadius}, matchesStatus=${matchesStatus}, bloodGroupCompatible=${isBloodGroupCompatible}`);
+    
+    return withinRadius && matchesStatus && isBloodGroupCompatible;
   });
 
   console.log('Filtered donors:', filteredDonors.length);
@@ -488,6 +586,14 @@ export function LiveMap() {
             className="flex items-center space-x-1 px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
           >
             <span>Test API</span>
+          </button>
+
+          {/* Test Specific Request Button */}
+          <button
+            onClick={testSpecificRequest}
+            className="flex items-center space-x-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+          >
+            <span>Test SMS Request</span>
           </button>
           
           {/* Debug Coordinates Button - NEW */}
@@ -575,6 +681,15 @@ export function LiveMap() {
                     />
                     <span className="text-sm text-gray-600 dark:text-gray-400">{radiusFilter}km</span>
                   </div>
+
+                  {/* Blood Group Compatibility Indicator */}
+                  {selectedRequest && selectedRequest !== 'all-locations' && (
+                    <div className="flex items-center space-x-2 bg-red-50 dark:bg-red-900/20 px-3 py-1 rounded-lg border border-red-200 dark:border-red-800">
+                      <span className="text-sm font-medium text-red-700 dark:text-red-300">
+                        Filtering for: {bloodRequests.find(req => req._id === selectedRequest)?.bloodGroup || 'Unknown'} compatible donors
+                      </span>
+                    </div>
+                  )}
                   
                   <select
                     value={selectedStatus}
@@ -679,15 +794,18 @@ export function LiveMap() {
               ) : (
                 filteredDonors.map((donor) => {
                   const distanceInfo = getDistanceCategory(donor.distance);
+                  
                   return (
-                    <div key={donor._id} className="p-4 border-b border-gray-100 dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+                    <div key={donor._id} className="p-4 border-b border-gray-100 dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700">
                       <div className="flex items-center justify-between mb-2">
                         <span className="font-medium text-gray-900 dark:text-white">{donor.name}</span>
-                        <div className="flex items-center space-x-1">
-                          <Navigation className="h-3 w-3 text-gray-400" />
-                          <span className={`text-sm font-medium ${distanceInfo.color}`}>
-                            {donor.distance.toFixed(1)}km
-                          </span>
+                        <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-1">
+                            <Navigation className="h-3 w-3 text-gray-400" />
+                            <span className={`text-sm font-medium ${distanceInfo.color}`}>
+                              {donor.distance.toFixed(1)}km
+                            </span>
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">

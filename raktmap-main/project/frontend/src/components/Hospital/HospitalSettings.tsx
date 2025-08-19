@@ -1,25 +1,76 @@
-import React, { useState } from 'react';
-import { Settings, MapPin, Phone, Key, Bell, Save, User } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, MapPin, Phone, Key, Bell, Save, User, RefreshCw } from 'lucide-react';
+import axios from 'axios';
+
+interface HospitalData {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  emergencyContact: string;
+  radius: number;
+  status: string;
+}
 
 export function HospitalSettings() {
+  const [hospitalData, setHospitalData] = useState<HospitalData | null>(null);
   const [settings, setSettings] = useState({
-    hospitalName: 'City Medical Center',
-    email: 'contact@citymedical.com',
-    phone: '+1 234-567-8901',
-    address: '123 Main St, City',
-    emergencyContact: '+1 234-567-8902',
+    hospitalName: '',
+    email: '',
+    phone: '',
+    address: '',
+    emergencyContact: '',
     defaultRadius: 10,
     smsNotifications: true,
     emailNotifications: true,
     emergencyAlerts: true,
     nightTimeRestrictions: false
   });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
     confirmPassword: ''
   });
+
+  useEffect(() => {
+    fetchHospitalProfile();
+  }, []);
+
+  const fetchHospitalProfile = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const response = await axios.get('/hospital/profile');
+      if (response.data.success) {
+        const hospital = response.data.hospital;
+        setHospitalData(hospital);
+        setSettings({
+          hospitalName: hospital.name,
+          email: hospital.email,
+          phone: hospital.phone,
+          address: hospital.address,
+          emergencyContact: hospital.emergencyContact,
+          defaultRadius: hospital.radius,
+          smsNotifications: true,
+          emailNotifications: true,
+          emergencyAlerts: true,
+          nightTimeRestrictions: false
+        });
+      }
+    } catch (err: any) {
+      console.error('Error fetching hospital profile:', err);
+      setError(err.response?.data?.message || 'Failed to fetch hospital profile');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSettingsChange = (field: string, value: any) => {
     setSettings({ ...settings, [field]: value });
@@ -29,9 +80,36 @@ export function HospitalSettings() {
     setPasswordData({ ...passwordData, [field]: value });
   };
 
-  const handleSaveSettings = () => {
-    console.log('Saving settings:', settings);
-    // Handle settings save
+  const handleSaveSettings = async () => {
+    try {
+      setSaving(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const updateData = {
+        name: settings.hospitalName,
+        email: settings.email,
+        phone: settings.phone,
+        address: settings.address,
+        emergencyContact: settings.emergencyContact,
+        radius: settings.defaultRadius
+      };
+
+      const response = await axios.put('/hospital/profile', updateData);
+      if (response.data.success) {
+        setSuccessMessage('Settings updated successfully!');
+        // Update local hospital data
+        setHospitalData(response.data.hospital);
+        
+        // Clear success message after 3 seconds
+        setTimeout(() => setSuccessMessage(null), 3000);
+      }
+    } catch (err: any) {
+      console.error('Error saving settings:', err);
+      setError(err.response?.data?.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handlePasswordUpdate = () => {
@@ -51,7 +129,37 @@ export function HospitalSettings() {
         <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Hospital Settings</h2>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Loading State */}
+      {loading && (
+        <div className="flex justify-center items-center py-12">
+          <RefreshCw className="h-8 w-8 animate-spin text-gray-400" />
+          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading settings...</span>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <span className="text-red-700 dark:text-red-300">{error}</span>
+          <button
+            onClick={fetchHospitalProfile}
+            className="ml-4 bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
+          <span className="text-green-700 dark:text-green-300">{successMessage}</span>
+        </div>
+      )}
+
+      {/* Settings Content */}
+      {!loading && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Hospital Information */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center space-x-2 mb-4">
@@ -263,13 +371,15 @@ export function HospitalSettings() {
           
           <button
             onClick={handleSaveSettings}
-            className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2"
+            disabled={saving}
+            className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center space-x-2"
           >
             <Save className="h-4 w-4" />
-            <span>Save All Settings</span>
+            <span>{saving ? 'Saving...' : 'Save All Settings'}</span>
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

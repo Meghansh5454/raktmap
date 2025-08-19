@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 
 // Import Donor model
 const Donor = require('../models/Donor');
+const DonorLocationResponse = require('../models/DonorLocationResponse');
 
 // ADD THIS TEST ENDPOINT AT THE TOP
 router.get('/test', (req, res) => {
@@ -141,51 +142,94 @@ const Location = mongoose.model('Location', LocationSchema);
 // Get all locations (user positions) for the live map
 router.get('/locations', async (req, res) => {
   try {
-    console.log('=== FETCHING LOCATIONS ===');
+    console.log('=== FETCHING LOCATIONS WITH BLOOD GROUP INFO ===');
     
-    // First, let's see what's in the database
+    // Get all donors to match with location data
+    const donors = await Donor.find({});
+    console.log('Found donors for matching:', donors.length);
+    
+    // Get locations from the old locations collection
     const allDocuments = await mongoose.connection.db.collection('locations').find({}).toArray();
-    console.log('Raw documents from database:', allDocuments);
-    console.log('Number of raw documents:', allDocuments.length);
+    console.log('Old locations found:', allDocuments.length);
     
-    // Now try with the model
-    const locations = await Location.find({}).sort({ timestamp: -1 });
-    console.log('Locations from model:', locations);
-    console.log('Number of locations from model:', locations.length);
+    // Get new location responses from DonorLocationResponse model
+    const newLocationResponses = await DonorLocationResponse.find({})
+      .populate('donorId')
+      .populate('requestId')
+      .sort({ createdAt: -1 });
+    console.log('New location responses found:', newLocationResponses.length);
     
-    if (locations.length === 0) {
-      console.log('No locations found in database');
-      return res.json({
-        success: true,
-        responses: [],
-        message: 'No locations found'
+    // Transform old locations
+    const transformedOldLocations = allDocuments.map(location => {
+      console.log('Processing old location for:', location.userName);
+      
+      // Try to match with donor data to get blood group
+      const matchingDonor = donors.find(donor => {
+        const phoneMatch = donor.phone === location.mobileNumber || 
+                          donor.phone?.replace(/\s+/g, '') === location.mobileNumber?.replace(/\s+/g, '');
+        const nameMatch = donor.name && location.userName && 
+                         donor.name.toLowerCase().trim() === location.userName.toLowerCase().trim();
+        return phoneMatch || nameMatch;
       });
-    }
-    
-    // Transform the data to match what the frontend expects
-    const transformedLocations = locations.map(location => {
-      console.log('Processing location:', location);
+      
+      if (matchingDonor) {
+        console.log(`Matched ${location.userName} with donor ${matchingDonor.name}, blood group: ${matchingDonor.bloodGroup}`);
+      }
+      
       return {
         _id: location._id.toString(),
         name: location.userName || 'Unknown User',
         phone: location.mobileNumber || 'No phone',
         donorId: location.rollNumber || 'No ID',
+        bloodGroup: matchingDonor ? matchingDonor.bloodGroup : 'Unknown',
         location: {
           lat: location.latitude,
           lng: location.longitude
         },
         status: 'responded',
         responseTime: location.timestamp || new Date(),
-        address: location.address
+        address: location.address,
+        source: 'old_collection'
       };
     });
     
-    console.log('Transformed locations:', transformedLocations);
-    console.log('Sending response with', transformedLocations.length, 'locations');
+    // Transform new location responses
+    const transformedNewLocations = newLocationResponses.map(response => {
+      console.log('Processing new location response for:', response.donorId?.name);
+      
+      return {
+        _id: response._id.toString(),
+        name: response.donorId?.name || 'Unknown User',
+        phone: response.donorId?.phone || 'No phone',
+        donorId: response.donorId?._id.toString() || 'No ID',
+        bloodGroup: response.donorId?.bloodGroup || 'Unknown',
+        location: {
+          lat: response.latitude,
+          lng: response.longitude
+        },
+        status: response.isAvailable ? 'responded' : 'unavailable',
+        responseTime: response.responseTime || response.createdAt,
+        address: response.address,
+        requestId: response.requestId?._id.toString(),
+        source: 'new_model'
+      };
+    });
+    
+    // Combine both sources, prioritizing new responses
+    const allLocations = [...transformedNewLocations, ...transformedOldLocations];
+    
+    console.log('Total combined locations:', allLocations.length);
+    console.log('New model locations:', transformedNewLocations.length);
+    console.log('Old collection locations:', transformedOldLocations.length);
     
     res.json({
       success: true,
-      responses: transformedLocations
+      responses: allLocations,
+      summary: {
+        total: allLocations.length,
+        newModel: transformedNewLocations.length,
+        oldCollection: transformedOldLocations.length
+      }
     });
   } catch (error) {
     console.error('Error fetching locations:', error);
@@ -201,31 +245,174 @@ router.get('/locations', async (req, res) => {
 router.get('/responses/:requestId', async (req, res) => {
   try {
     const { requestId } = req.params;
+    const { timeFilter = 'all', maxAgeHours } = req.query; // New filtering parameters
+    
     console.log('Fetching responses for requestId:', requestId);
+    console.log('Time filter:', timeFilter, 'Max age hours:', maxAgeHours);
     
-    // For now, return all locations when a specific request is selected
-    const locations = await Location.find({}).sort({ timestamp: -1 });
+    // Helper function to normalize blood group strings
+    const normalizeBloodGroup = (bloodGroup) => {
+      if (!bloodGroup || bloodGroup === 'Unknown') return 'Unknown';
+      // Remove spaces and standardize format
+      return bloodGroup.replace(/\s+/g, '').toUpperCase();
+    };
     
-    const transformedLocations = locations.map(location => ({
-      _id: location._id.toString(),
-      requestId: requestId,
-      name: location.userName || 'Unknown User',
-      phone: location.mobileNumber || 'No phone',
-      donorId: location.rollNumber || 'No ID',
-      location: {
-        lat: location.latitude,
-        lng: location.longitude
-      },
-      status: 'responded',
-      responseTime: location.timestamp || new Date(),
-      address: location.address
-    }));
+    // Get the blood request to know when it was created
+    const BloodRequest = require('../models/BloodRequest');
+    const bloodRequest = await BloodRequest.findById(requestId);
     
-    console.log(`Found ${transformedLocations.length} locations for request ${requestId}`);
+    if (!bloodRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Blood request not found'
+      });
+    }
+    
+    console.log('Blood request created at:', bloodRequest.createdAt);
+    
+    // Calculate time filter boundaries
+    let responseTimeFilter = {};
+    const requestCreatedAt = bloodRequest.createdAt;
+    
+    if (timeFilter === 'after-request') {
+      // Only responses AFTER the blood request was created
+      responseTimeFilter = { $gte: requestCreatedAt };
+    } else if (timeFilter === 'recent' || maxAgeHours) {
+      // Only responses within specified hours (default 24 hours)
+      const hoursLimit = parseInt(maxAgeHours) || 24;
+      const cutoffTime = new Date(Date.now() - (hoursLimit * 60 * 60 * 1000));
+      responseTimeFilter = { 
+        $gte: new Date(Math.max(requestCreatedAt.getTime(), cutoffTime.getTime()))
+      };
+    }
+    // 'all' filter = no time restrictions
+    
+    // Get all donors to match with location data
+    const donors = await Donor.find({});
+    console.log('Found donors:', donors.length);
+    
+    // Get new location responses for this specific request with time filtering
+    let newResponseQuery = { requestId };
+    if (Object.keys(responseTimeFilter).length > 0) {
+      newResponseQuery.createdAt = responseTimeFilter;
+    }
+    
+    const newLocationResponses = await DonorLocationResponse.find(newResponseQuery)
+      .populate('donorId')
+      .populate('requestId')
+      .sort({ createdAt: -1 });
+    console.log('New location responses found for request:', newLocationResponses.length);
+    
+    // Get old locations with time filtering
+    let oldLocationFilter = {};
+    if (Object.keys(responseTimeFilter).length > 0) {
+      oldLocationFilter.timestamp = responseTimeFilter;
+    }
+    
+    const locations = await mongoose.connection.db.collection('locations')
+      .find(oldLocationFilter)
+      .toArray();
+    
+    // Transform new location responses with enhanced time info
+    const transformedNewResponses = newLocationResponses.map(response => {
+      const responseTime = response.responseTime || response.createdAt;
+      const timeSinceRequest = responseTime ? 
+        Math.round((responseTime.getTime() - requestCreatedAt.getTime()) / (1000 * 60)) : null;
+      
+      return {
+        _id: response._id.toString(),
+        requestId: requestId,
+        name: response.donorId?.name || 'Unknown User',
+        phone: response.donorId?.phone || 'No phone',
+        donorId: response.donorId?._id.toString() || 'No ID',
+        bloodGroup: normalizeBloodGroup(response.donorId?.bloodGroup) || 'Unknown',
+        location: {
+          lat: response.latitude,
+          lng: response.longitude
+        },
+        status: response.isAvailable ? 'responded' : 'unavailable',
+        responseTime: responseTime,
+        timeSinceRequest: timeSinceRequest, // Minutes after request was created
+        address: response.address,
+        source: 'token_response',
+        isRecentResponse: timeSinceRequest !== null && timeSinceRequest >= 0
+      };
+    });
+    
+    // Transform old locations with enhanced time info
+    const transformedOldLocations = locations.map(location => {
+      // Try to match with donor data to get blood group
+      const matchingDonor = donors.find(donor => {
+        const phoneMatch = donor.phone === location.mobileNumber || 
+                          donor.phone?.replace(/\s+/g, '') === location.mobileNumber?.replace(/\s+/g, '');
+        const nameMatch = donor.name && location.userName && 
+                         donor.name.toLowerCase().trim() === location.userName.toLowerCase().trim();
+        return phoneMatch || nameMatch;
+      });
+      
+      const responseTime = location.timestamp || new Date();
+      const timeSinceRequest = Math.round((responseTime.getTime() - requestCreatedAt.getTime()) / (1000 * 60));
+      
+      return {
+        _id: location._id.toString(),
+        requestId: requestId,
+        name: location.userName || 'Unknown User',
+        phone: location.mobileNumber || 'No phone',
+        donorId: location.rollNumber || 'No ID',
+        bloodGroup: normalizeBloodGroup(matchingDonor ? matchingDonor.bloodGroup : 'Unknown'),
+        location: {
+          lat: location.latitude,
+          lng: location.longitude
+        },
+        status: 'responded',
+        responseTime: responseTime,
+        timeSinceRequest: timeSinceRequest, // Minutes after request was created
+        address: location.address,
+        source: 'old_collection',
+        isRecentResponse: timeSinceRequest >= 0
+      };
+    });
+    
+    // Combine both sources, prioritizing new responses
+    let allResponses = [...transformedNewResponses, ...transformedOldLocations];
+    
+    // Sort by response time (most recent first)
+    allResponses.sort((a, b) => {
+      if (!a.responseTime) return 1;
+      if (!b.responseTime) return -1;
+      return new Date(b.responseTime).getTime() - new Date(a.responseTime).getTime();
+    });
+    
+    // Filter out responses that came BEFORE the request (if any)
+    const validResponses = allResponses.filter(response => response.isRecentResponse);
+    const invalidResponses = allResponses.filter(response => !response.isRecentResponse);
+    
+    console.log(`Total responses for request ${requestId}:`, allResponses.length);
+    console.log('Valid responses (after request):', validResponses.length);
+    console.log('Invalid responses (before request):', invalidResponses.length);
+    console.log('New token responses:', transformedNewResponses.length);
+    console.log('Old collection responses:', transformedOldLocations.length);
     
     res.json({
       success: true,
-      responses: transformedLocations
+      responses: validResponses, // Only return valid responses
+      requestInfo: {
+        requestId: requestId,
+        createdAt: bloodRequest.createdAt,
+        bloodGroup: bloodRequest.bloodGroup,
+        status: bloodRequest.status
+      },
+      filterInfo: {
+        timeFilter: timeFilter,
+        maxAgeHours: maxAgeHours,
+        filterApplied: Object.keys(responseTimeFilter).length > 0
+      },
+      summary: {
+        total: validResponses.length,
+        tokenResponses: transformedNewResponses.filter(r => r.isRecentResponse).length,
+        oldResponses: transformedOldLocations.filter(r => r.isRecentResponse).length,
+        excludedOldResponses: invalidResponses.length
+      }
     });
   } catch (error) {
     console.error('Error fetching donor responses:', error);

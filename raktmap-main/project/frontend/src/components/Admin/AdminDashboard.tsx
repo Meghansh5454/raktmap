@@ -1,17 +1,52 @@
-import React, { useEffect } from 'react';
-import { Building2, Users, Heart, Activity, TrendingUp, Clock } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Building2, Users, Heart, Activity, TrendingUp, Clock, RefreshCw } from 'lucide-react';
 import { StatsCard } from '../Shared/StatsCard';
 import { Chart } from '../Shared/Chart';
-
+import axios from 'axios';
 
 export function AdminDashboard() {
-  // Remove localStorage token check
-  // useEffect(() => {
-  //   const token = localStorage.getItem('token');
-  //   if (!token) {
-  //     window.location.href = '/login';
-  //   }
-  // }, []);
+  const [stats, setStats] = useState({
+    totalHospitals: 0,
+    activeDonors: 0,
+    bloodRequests: 0,
+    responseRate: 0
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch dashboard statistics
+  const fetchDashboardStats = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Fetch hospitals and donors in parallel
+      const [hospitalsResponse, donorsResponse] = await Promise.all([
+        axios.get('http://localhost:5000/hospitals'),
+        axios.get('http://localhost:5000/donors')
+      ]);
+
+      const hospitals = hospitalsResponse.data.success ? hospitalsResponse.data.hospitals : [];
+      const donors = donorsResponse.data || [];
+
+      setStats({
+        totalHospitals: hospitals.length,
+        activeDonors: donors.length,
+        bloodRequests: 28, // This would come from blood requests API
+        responseRate: 68 // This would be calculated from donor responses
+      });
+
+    } catch (err: any) {
+      console.error('Error fetching dashboard stats:', err);
+      setError('Failed to load dashboard statistics');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboardStats();
+  }, []);
 
   const recentActivity = [
     { id: 1, action: 'New hospital registered', hospital: 'City Medical Center', time: '2 hours ago' },
@@ -38,31 +73,54 @@ export function AdminDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
+        <button
+          onClick={fetchDashboardStats}
+          disabled={loading}
+          className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      {/* Error State */}
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <div className="flex items-center">
+            <span className="text-red-700 dark:text-red-300">⚠️ {error}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatsCard
           title="Total Hospitals"
-          value={45}
+          value={loading ? '...' : stats.totalHospitals}
           icon={Building2}
           trend={{ value: 12, isPositive: true }}
           color="blue"
         />
         <StatsCard
           title="Active Donors"
-          value={1250}
+          value={loading ? '...' : stats.activeDonors}
           icon={Users}
           trend={{ value: 8, isPositive: true }}
           color="green"
         />
         <StatsCard
           title="Blood Requests"
-          value={89}
+          value={loading ? '...' : stats.bloodRequests}
           icon={Heart}
           trend={{ value: 5, isPositive: false }}
           color="red"
         />
         <StatsCard
           title="Response Rate"
-          value="68%"
+          value={loading ? '...' : `${stats.responseRate}%`}
           icon={TrendingUp}
           trend={{ value: 15, isPositive: true }}
           color="yellow"

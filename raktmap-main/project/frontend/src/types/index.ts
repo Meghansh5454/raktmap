@@ -19,6 +19,7 @@ export interface Hospital {
 
 export interface Donor {
   _id: string;
+  id?: string; // For backwards compatibility
   name: string;
   email: string;
   phone: string;
@@ -27,6 +28,13 @@ export interface Donor {
   role: string;
   createdAt: string;
   updatedAt: string;
+  // Additional fields for admin management
+  age?: number;
+  address?: string;
+  lastDonation?: string;
+  status?: 'available' | 'responded' | 'unavailable';
+  distance?: number;
+  department?: string;
 }
 
 export interface BloodRequest {

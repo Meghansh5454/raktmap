@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, MapPin, Phone, Calendar, Filter, Search, CheckCircle, X, Heart, RefreshCw } from 'lucide-react';
+import { Users, MapPin, Phone, Calendar, Search, CheckCircle, X, RefreshCw, Plus } from 'lucide-react';
 import { Donor } from '../../types';
 import axios from 'axios';
 
@@ -15,16 +15,118 @@ interface DonorWithLocation extends Donor {
   matchedBy?: string;
 }
 
+interface BloodRequest {
+  _id: string;
+  bloodGroup: string;
+  quantity: number;
+  urgency: string;
+  status: string;
+  createdAt: string;
+}
+
 export function AvailableDonors() {
   const [searchValue, setSearchValue] = useState('');
-  const [selectedBloodGroup, setSelectedBloodGroup] = useState('');
-  const [selectedDistance, setSelectedDistance] = useState('');
-  const [selectedDepartment, setSelectedDepartment] = useState('');
-  const [selectedResponseStatus, setSelectedResponseStatus] = useState(''); // New filter for response status
+  const [selectedRequest, setSelectedRequest] = useState<string>('all'); // Only blood request filter
   const [donors, setDonors] = useState<DonorWithLocation[]>([]);
+  const [bloodRequests, setBloodRequests] = useState<BloodRequest[]>([]);
+  const [donationHistory, setDonationHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualEntry, setManualEntry] = useState({
+    donorId: '',
+    donorName: '',
+    donorPhone: '',
+    donorBloodGroup: '',
+    donationDate: '',
+    notes: ''
+  });
+
+  // Blood group compatibility function
+  const getCompatibleBloodGroups = (requestedBloodGroup: string): string[] => {
+    // This returns which donor blood groups can give to the requested blood group
+    const compatibility: { [key: string]: string[] } = {
+      'A+': ['A+', 'A-', 'O+', 'O-'],        // A+ can receive from A+, A-, O+, O-
+      'A-': ['A-', 'O-'],                     // A- can receive from A-, O-
+      'B+': ['B+', 'B-', 'O+', 'O-'],        // B+ can receive from B+, B-, O+, O-
+      'B-': ['B-', 'O-'],                     // B- can receive from B-, O-
+      'AB+': ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'], // AB+ can receive from everyone (universal recipient)
+      'AB-': ['A-', 'B-', 'AB-', 'O-'],      // AB- can receive from A-, B-, AB-, O-
+      'O+': ['O+', 'O-'],                     // O+ can receive from O+, O-
+      'O-': ['O-']                            // O- can only receive from O- (universal donor to others, but restrictive recipient)
+    };
+    
+    return compatibility[requestedBloodGroup] || [];
+  };
+
+  // Fetch blood requests from hospital
+  const fetchBloodRequests = async () => {
+    try {
+      console.log('=== FETCHING BLOOD REQUESTS FOR AVAILABLE DONORS ===');
+      const response = await axios.get('http://localhost:5000/blood-requests/hospital', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      
+      console.log('Blood requests response:', response.data);
+      
+      if (response.data.success) {
+        // Add "All Donors" as first option
+        const allDonorsOption: BloodRequest = {
+          _id: 'all',
+          bloodGroup: 'All Donors',
+          quantity: 0,
+          urgency: 'info',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        };
+        
+        const updatedRequests = [allDonorsOption, ...response.data.bloodRequests];
+        setBloodRequests(updatedRequests);
+      }
+    } catch (error: any) {
+      console.error('Error fetching blood requests:', error);
+      // Fallback to mock data for development with test requests
+      const mockRequests: BloodRequest[] = [
+        {
+          _id: 'all',
+          bloodGroup: 'All Donors',
+          quantity: 0,
+          urgency: 'info',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        },
+        // Add test requests to demonstrate filtering
+        {
+          _id: 'test-o-negative',
+          bloodGroup: 'O-',
+          quantity: 1,
+          urgency: 'high',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        },
+        {
+          _id: 'test-a-positive',
+          bloodGroup: 'A+',
+          quantity: 2,
+          urgency: 'medium',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        },
+        {
+          _id: 'test-b-negative',
+          bloodGroup: 'B-',
+          quantity: 1,
+          urgency: 'low',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        }
+      ];
+      setBloodRequests(mockRequests);
+    }
+  };
 
   // Fetch donors from API
   const fetchDonors = async () => {
@@ -45,9 +147,37 @@ export function AvailableDonors() {
     }
   };
 
-  // Fetch donors on component mount
+  // Fetch donation history
+  const fetchDonationHistory = async () => {
+    try {
+      // Get hospital ID from token or localStorage
+      const hospitalId = localStorage.getItem('hospitalId') || '676a02e52a63ad1b45ed0ac9'; // Default hospital ID
+      
+      const response = await axios.get(`http://localhost:5000/donation-history/donation-history/${hospitalId}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (response.data.success) {
+        setDonationHistory(response.data.donationHistory);
+        console.log(`Fetched ${response.data.donationHistory.length} donation history records`);
+      } else {
+        console.error('Failed to fetch donation history:', response.data.message);
+      }
+    } catch (error: any) {
+      console.error('Error fetching donation history:', error);
+    }
+  };
+
+  // Fetch donors on component mount and blood requests
   useEffect(() => {
-    fetchDonors();
+    const initializeData = async () => {
+      await fetchBloodRequests();
+      await fetchDonors();
+      await fetchDonationHistory();
+    };
+    initializeData();
   }, []);
 
   // Refresh donors
@@ -55,17 +185,6 @@ export function AvailableDonors() {
     setRefreshing(true);
     await fetchDonors();
   };
-
-  const bloodGroups = ['A +', 'A -', 'B +', 'B -', 'AB +', 'AB -', 'O +', 'O -'];
-  const departments = ['Engineering', 'Marketing', 'Sales', 'HR', 'Finance', 'Operations'];
-  const distanceRanges = ['0-2km', '2-5km', '5-10km', '10+km'];
-  const responseStatuses = [
-    { value: '', label: 'All Donors' },
-    { value: 'responded', label: 'Location Shared' },
-    { value: 'available', label: 'No Location' },
-    { value: 'near', label: 'Near (≤5km)' },
-    { value: 'far', label: 'Far (>5km)' }
-  ];
 
   const getStatusColor = (status: string, hasLocation?: boolean, distance?: number) => {
     if (hasLocation) {
@@ -105,63 +224,110 @@ export function AvailableDonors() {
     return 'Not Contacted';
   };
 
-  const handleAction = (donorId: string, action: string) => {
+  const handleAction = async (donorId: string, action: string) => {
     console.log(`Action ${action} for donor ${donorId}`);
-    // Handle donor actions
+    
+    if (action === 'contact') {
+      // Handle contact action - open phone dialer
+      const donor = donors.find(d => d.id === donorId || d.email === donorId);
+      if (donor) {
+        // Open phone dialer
+        window.open(`tel:${donor.phone}`, '_self');
+      }
+    } else if (action === 'decline') {
+      // Handle decline action
+      console.log('Donor declined - this could update their status in the future');
+    }
+  };
+
+  // Add manual donation entry
+  const addManualDonation = async () => {
+    if (!manualEntry.donorName || !manualEntry.donorPhone || !manualEntry.donorBloodGroup || !manualEntry.donationDate) {
+      alert('Please fill all required fields');
+      return;
+    }
+
+    if (selectedRequest === 'all') {
+      alert('Please select a specific blood request for this donation');
+      return;
+    }
+
+    try {
+      const response = await axios.post('http://localhost:5000/donation-history/accept-donor', {
+        donorId: manualEntry.donorId || manualEntry.donorPhone, // Use phone as ID if no donorId
+        bloodRequestId: selectedRequest,
+        donorName: manualEntry.donorName,
+        donorPhone: manualEntry.donorPhone,
+        donorBloodGroup: manualEntry.donorBloodGroup,
+        location: { lat: 22.6013, lng: 72.8327 }, // Hospital location
+        address: 'Manual entry - Hospital location',
+        status: 'completed', // Mark as completed since donation already happened
+        acceptedAt: new Date(manualEntry.donationDate),
+        completedAt: new Date(manualEntry.donationDate),
+        notes: manualEntry.notes
+      }, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (response.data.success) {
+        alert(`Successfully added donation record for ${manualEntry.donorName}!`);
+        await fetchDonationHistory(); // Refresh donation history
+        
+        // Reset form
+        setManualEntry({
+          donorId: '',
+          donorName: '',
+          donorPhone: '',
+          donorBloodGroup: '',
+          donationDate: '',
+          notes: ''
+        });
+        setShowManualEntry(false);
+      } else {
+        throw new Error(response.data.message || 'Failed to add donation record');
+      }
+      
+    } catch (error: any) {
+      console.error('Error adding manual donation:', error);
+      alert(`Failed to add donation record: ${error.response?.data?.message || error.message}`);
+    }
   };
 
   const filteredDonors = donors.filter(donor => {
+    // Basic search filter
     const matchesSearch = donor.name.toLowerCase().includes(searchValue.toLowerCase()) ||
                          donor.rollNo?.toLowerCase().includes(searchValue.toLowerCase()) ||
                          donor.phone.toLowerCase().includes(searchValue.toLowerCase());
-    const matchesBloodGroup = !selectedBloodGroup || donor.bloodGroup === selectedBloodGroup;
-    const matchesDepartment = !selectedDepartment || donor.rollNo?.includes(selectedDepartment);
     
-    // Response status filtering
-    let matchesResponseStatus = true;
-    if (selectedResponseStatus) {
-      switch (selectedResponseStatus) {
-        case 'responded':
-          matchesResponseStatus = donor.hasLocationData === true;
-          break;
-        case 'available':
-          matchesResponseStatus = donor.hasLocationData === false;
-          break;
-        case 'near':
-          matchesResponseStatus = donor.hasLocationData === true && 
-                                 donor.distance !== null && 
-                                 donor.distance !== undefined && 
-                                 donor.distance <= 5;
-          break;
-        case 'far':
-          matchesResponseStatus = donor.hasLocationData === true && 
-                                 donor.distance !== null && 
-                                 donor.distance !== undefined && 
-                                 donor.distance > 5;
-          break;
+    // Response filtering based on selected request
+    let shouldShowDonor = true;
+    
+    if (selectedRequest === 'all') {
+      // "All Donors" - show everyone (responded + not contacted)
+      shouldShowDonor = true;
+    } else {
+      // Specific blood request selected - ONLY show donors who have responded
+      const hasResponded = donor.hasLocationData === true;
+      
+      // Blood request compatibility filtering - ONLY for responded donors
+      let matchesBloodRequest = true;
+      const selectedBloodRequest = bloodRequests.find(req => req._id === selectedRequest);
+      if (selectedBloodRequest) {
+        const compatibleGroups = getCompatibleBloodGroups(selectedBloodRequest.bloodGroup);
+        const donorBloodGroup = donor.bloodGroup?.replace(/\s+/g, '') || 'Unknown'; // Normalize spaces
+        matchesBloodRequest = compatibleGroups.includes(donorBloodGroup);
+        console.log(`🩸 FILTERING: Donor ${donor.name} (${donorBloodGroup}) responded: ${hasResponded}, compatible with request ${selectedBloodRequest.bloodGroup}?`, matchesBloodRequest);
+        console.log(`Compatible groups for ${selectedBloodRequest.bloodGroup}:`, compatibleGroups);
       }
+      
+      // For specific requests: must have responded AND be blood compatible
+      shouldShowDonor = hasResponded && matchesBloodRequest;
     }
     
-    let matchesDistance = true;
-    if (selectedDistance && donor.distance !== null && donor.distance !== undefined) {
-      const distance = donor.distance;
-      switch (selectedDistance) {
-        case '0-2km':
-          matchesDistance = distance <= 2;
-          break;
-        case '2-5km':
-          matchesDistance = distance > 2 && distance <= 5;
-          break;
-        case '5-10km':
-          matchesDistance = distance > 5 && distance <= 10;
-          break;
-        case '10+km':
-          matchesDistance = distance > 10;
-          break;
-      }
-    }
-    
-    return matchesSearch && matchesBloodGroup && matchesDepartment && matchesDistance && matchesResponseStatus;
+    // Must match search AND meet the response/request criteria
+    return matchesSearch && shouldShowDonor;
   });
 
   return (
@@ -187,6 +353,13 @@ export function AvailableDonors() {
               </>
             )}
           </div>
+          <button
+            onClick={() => setShowManualEntry(true)}
+            className="flex items-center space-x-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Add Donation</span>
+          </button>
           <button
             onClick={handleRefresh}
             disabled={refreshing}
@@ -218,62 +391,31 @@ export function AvailableDonors() {
         </div>
       )}
 
-      {/* Search and Filters */}
+      {/* Search and Blood Request Filter - SIMPLIFIED */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-          <div className="lg:col-span-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-              <input
-                type="text"
-                placeholder="Search by name, roll no, or phone..."
-                value={searchValue}
-                onChange={(e) => setSearchValue(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              />
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Search Box */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <input
+              type="text"
+              placeholder="Search by name, roll no, or phone..."
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
           </div>
           
+          {/* Blood Request Filter - ONLY FILTER */}
           <select
-            value={selectedResponseStatus}
-            onChange={(e) => setSelectedResponseStatus(e.target.value)}
+            value={selectedRequest}
+            onChange={(e) => setSelectedRequest(e.target.value)}
             className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
           >
-            {responseStatuses.map(status => (
-              <option key={status.value} value={status.value}>{status.label}</option>
-            ))}
-          </select>
-          
-          <select
-            value={selectedBloodGroup}
-            onChange={(e) => setSelectedBloodGroup(e.target.value)}
-            className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
-          >
-            <option value="">All Blood Groups</option>
-            {bloodGroups.map(group => (
-              <option key={group} value={group}>{group}</option>
-            ))}
-          </select>
-
-          <select
-            value={selectedDistance}
-            onChange={(e) => setSelectedDistance(e.target.value)}
-            className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
-          >
-            <option value="">All Distances</option>
-            {distanceRanges.map(range => (
-              <option key={range} value={range}>{range}</option>
-            ))}
-          </select>
-
-          <select
-            value={selectedDepartment}
-            onChange={(e) => setSelectedDepartment(e.target.value)}
-            className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
-          >
-            <option value="">All Departments</option>
-            {departments.map(dept => (
-              <option key={dept} value={dept}>{dept}</option>
+            {bloodRequests.map((request) => (
+              <option key={request._id} value={request._id}>
+                {request._id === 'all' ? 'All Donors' : `${request.bloodGroup} - ${new Date(request.createdAt).toLocaleDateString()}`}
+              </option>
             ))}
           </select>
         </div>
@@ -282,7 +424,7 @@ export function AvailableDonors() {
       {/* Donor Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredDonors.map((donor) => (
-          <div key={donor.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-shadow">
+          <div key={donor.email || donor.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-shadow">
             <div className="flex justify-between items-start mb-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{donor.name}</h3>
@@ -292,7 +434,7 @@ export function AvailableDonors() {
               </div>
               <div className="flex items-center space-x-2">
                 <span className="text-lg font-bold text-red-600 dark:text-red-400">{donor.bloodGroup}</span>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(donor.status, donor.hasLocationData, donor.distance)}`}>
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(donor.status || '', donor.hasLocationData, donor.distance)}`}>
                   {getStatusLabel(donor)}
                 </span>
               </div>
@@ -337,23 +479,14 @@ export function AvailableDonors() {
 
             <div className="flex space-x-2">
               <button
-                onClick={() => handleAction(donor.id, 'contact')}
+                onClick={() => handleAction(donor.email || donor.id || '', 'contact')}
                 className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center justify-center space-x-1"
               >
                 <Phone className="h-3 w-3" />
                 <span>Contact</span>
               </button>
-              {donor.location && (
-                <button
-                  onClick={() => handleAction(donor.id, 'confirm')}
-                  className="flex-1 bg-green-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-green-700 transition-colors flex items-center justify-center space-x-1"
-                >
-                  <CheckCircle className="h-3 w-3" />
-                  <span>Confirm</span>
-                </button>
-              )}
               <button
-                onClick={() => handleAction(donor.id, 'decline')}
+                onClick={() => handleAction(donor.email || donor.id || '', 'decline')}
                 className="bg-red-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-red-700 transition-colors"
               >
                 <X className="h-3 w-3" />
@@ -367,6 +500,181 @@ export function AvailableDonors() {
         <div className="text-center py-12">
           <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-500 dark:text-gray-400">No donors found matching your criteria</p>
+        </div>
+      )}
+
+      {/* Donation History Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-xl font-bold text-gray-900 dark:text-white">Donation History</h3>
+          <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
+            <CheckCircle className="h-4 w-4 text-green-500" />
+            <span>{donationHistory.length} donations recorded</span>
+          </div>
+        </div>
+
+        {donationHistory.length > 0 ? (
+          <div className="space-y-3">
+            {donationHistory.map((history) => (
+              <div key={history._id} className="p-4 border border-gray-200 dark:border-gray-600 rounded-lg bg-green-50 dark:bg-green-900/20">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <h4 className="font-medium text-gray-900 dark:text-white">{history.donorName}</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Blood Group: <span className="font-semibold text-red-600">{history.donorBloodGroup}</span></p>
+                  </div>
+                  <div className="text-right">
+                    <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      history.status === 'completed' 
+                        ? 'bg-blue-100 text-blue-800' 
+                        : 'bg-green-100 text-green-800'
+                    }`}>
+                      {history.status === 'completed' ? '✓ Donated' : '✓ Accepted'}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {history.status === 'completed' && history.completedAt
+                        ? `${new Date(history.completedAt).toLocaleDateString()} at ${new Date(history.completedAt).toLocaleTimeString()}`
+                        : `${new Date(history.acceptedAt).toLocaleDateString()} at ${new Date(history.acceptedAt).toLocaleTimeString()}`
+                      }
+                    </p>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center text-sm text-gray-600 dark:text-gray-400">
+                  <div className="flex items-center space-x-4">
+                    <span>📞 {history.donorPhone}</span>
+                    {history.bloodRequestId?.bloodGroup && (
+                      <span>🩸 For: {history.bloodRequestId.bloodGroup} request</span>
+                    )}
+                  </div>
+                  <span className="text-xs">
+                    📍 {history.address || 'Location shared'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <CheckCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500 dark:text-gray-400">No donation records yet</p>
+            <p className="text-sm text-gray-400 mt-2">
+              Use the "Add Donation" button above to manually record completed donations
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Manual Donation Entry Modal */}
+      {showManualEntry && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Add Donation Record</h3>
+              <button
+                onClick={() => setShowManualEntry(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Donor Name *
+                </label>
+                <input
+                  type="text"
+                  value={manualEntry.donorName}
+                  onChange={(e) => setManualEntry(prev => ({...prev, donorName: e.target.value}))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Enter donor name"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Phone Number *
+                </label>
+                <input
+                  type="tel"
+                  value={manualEntry.donorPhone}
+                  onChange={(e) => setManualEntry(prev => ({...prev, donorPhone: e.target.value}))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Enter phone number"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Blood Group *
+                </label>
+                <select
+                  value={manualEntry.donorBloodGroup}
+                  onChange={(e) => setManualEntry(prev => ({...prev, donorBloodGroup: e.target.value}))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">Select blood group</option>
+                  <option value="A+">A+</option>
+                  <option value="A-">A-</option>
+                  <option value="B+">B+</option>
+                  <option value="B-">B-</option>
+                  <option value="AB+">AB+</option>
+                  <option value="AB-">AB-</option>
+                  <option value="O+">O+</option>
+                  <option value="O-">O-</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Donation Date *
+                </label>
+                <input
+                  type="date"
+                  value={manualEntry.donationDate}
+                  onChange={(e) => setManualEntry(prev => ({...prev, donationDate: e.target.value}))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Notes (Optional)
+                </label>
+                <textarea
+                  value={manualEntry.notes}
+                  onChange={(e) => setManualEntry(prev => ({...prev, notes: e.target.value}))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  rows={3}
+                  placeholder="Any additional notes..."
+                />
+              </div>
+
+              {selectedRequest === 'all' && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <p className="text-sm text-yellow-800">
+                    Please select a specific blood request above to associate this donation with.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowManualEntry(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addManualDonation}
+                disabled={!manualEntry.donorName || !manualEntry.donorPhone || !manualEntry.donorBloodGroup || !manualEntry.donationDate || selectedRequest === 'all'}
+                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                Add Donation
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

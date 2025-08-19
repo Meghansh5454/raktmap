@@ -1,50 +1,147 @@
-import React, { useState } from 'react';
-import { Plus, Edit, Eye, Trash2, CheckCircle, XCircle, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, Edit, Eye, Trash2, CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react';
 import { Table } from '../Shared/Table';
 import { Modal } from '../Shared/Modal';
 import { Hospital } from '../../types';
+import axios from 'axios';
 
 export function HospitalManagement() {
   const [searchValue, setSearchValue] = useState('');
   const [selectedHospital, setSelectedHospital] = useState<Hospital | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState<'view' | 'edit' | 'add'>('view');
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    emergencyContact: '',
+    address: '',
+    radius: 10,
+    status: 'pending'
+  });
 
-  const hospitals: Hospital[] = [
-    {
-      id: '1',
-      name: 'City Medical Center',
-      email: 'contact@citymedical.com',
-      phone: '+1 234-567-8901',
-      address: '123 Main St, City',
-      emergencyContact: '+1 234-567-8902',
-      radius: 10,
-      status: 'active',
-      registeredAt: '2024-01-15',
-    },
-    {
-      id: '2',
-      name: 'General Hospital',
-      email: 'info@generalhospital.com',
-      phone: '+1 234-567-8903',
-      address: '456 Oak Ave, City',
-      emergencyContact: '+1 234-567-8904',
-      radius: 15,
-      status: 'pending',
-      registeredAt: '2024-01-20',
-    },
-    {
-      id: '3',
-      name: 'Emergency Care Center',
-      email: 'emergency@carecentre.com',
-      phone: '+1 234-567-8905',
-      address: '789 Pine St, City',
-      emergencyContact: '+1 234-567-8906',
-      radius: 8,
-      status: 'suspended',
-      registeredAt: '2024-01-10',
-    },
-  ];
+  // Fetch hospitals from API
+  const fetchHospitals = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      console.log('Fetching hospitals from database...');
+      const response = await axios.get('http://localhost:5000/admin/hospitals');
+      if (response.data.success) {
+        setHospitals(response.data.hospitals);
+        console.log('Fetched hospitals:', response.data.hospitals.length);
+      } else {
+        throw new Error(response.data.message || 'Failed to fetch hospitals');
+      }
+    } catch (err: any) {
+      console.error('Error fetching hospitals:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to fetch hospitals');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch hospitals on component mount
+  useEffect(() => {
+    fetchHospitals();
+  }, []);
+
+  // Initialize form data when modal opens
+  useEffect(() => {
+    if (isModalOpen) {
+      if (modalType === 'edit' && selectedHospital) {
+        setFormData({
+          name: selectedHospital.name,
+          email: selectedHospital.email,
+          phone: selectedHospital.phone,
+          emergencyContact: selectedHospital.emergencyContact,
+          address: selectedHospital.address,
+          radius: selectedHospital.radius,
+          status: selectedHospital.status
+        });
+      } else if (modalType === 'add') {
+        setFormData({
+          name: '',
+          email: '',
+          phone: '',
+          emergencyContact: '',
+          address: '',
+          radius: 10,
+          status: 'pending'
+        });
+      }
+    }
+  }, [isModalOpen, modalType, selectedHospital]);
+
+  // Handle form input changes
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  // Create hospital
+  const handleCreateHospital = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post('http://localhost:5000/hospitals', formData, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.data.success) {
+        await fetchHospitals();
+        setIsModalOpen(false);
+        setSelectedHospital(null);
+      }
+    } catch (err: any) {
+      console.error('Error creating hospital:', err);
+      setError(err.response?.data?.message || 'Failed to create hospital');
+    }
+  };
+
+  // Update hospital
+  const handleUpdateHospital = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedHospital) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.put(`http://localhost:5000/hospitals/${selectedHospital._id}`, formData, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.data.success) {
+        await fetchHospitals();
+        setIsModalOpen(false);
+        setSelectedHospital(null);
+      }
+    } catch (err: any) {
+      console.error('Error updating hospital:', err);
+      setError(err.response?.data?.message || 'Failed to update hospital');
+    }
+  };
+
+  // Delete hospital
+  const handleDeleteHospital = async (hospitalId: string) => {
+    if (!confirm('Are you sure you want to delete this hospital?')) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.delete(`http://localhost:5000/hospitals/${hospitalId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.data.success) {
+        await fetchHospitals();
+      }
+    } catch (err: any) {
+      console.error('Error deleting hospital:', err);
+      setError(err.response?.data?.message || 'Failed to delete hospital');
+    }
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -111,7 +208,10 @@ export function HospitalManagement() {
           >
             <Edit className="h-4 w-4" />
           </button>
-          <button className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300">
+          <button
+            onClick={() => handleDeleteHospital(hospital.id)}
+            className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+          >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
@@ -127,27 +227,71 @@ export function HospitalManagement() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Hospital Management</h2>
-        <button
-          onClick={() => {
-            setSelectedHospital(null);
-            setModalType('add');
-            setIsModalOpen(true);
-          }}
-          className="flex items-center space-x-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Add Hospital</span>
-        </button>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Hospital Management</h2>
+          {!loading && (
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              {hospitals.length} hospitals found
+            </p>
+          )}
+        </div>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={fetchHospitals}
+            disabled={loading}
+            className="flex items-center space-x-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
+          <button
+            onClick={() => {
+              setSelectedHospital(null);
+              setModalType('add');
+              setIsModalOpen(true);
+            }}
+            className="flex items-center space-x-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Add Hospital</span>
+          </button>
+        </div>
       </div>
 
-      <Table
-        data={filteredHospitals}
-        columns={columns}
-        searchable
-        searchValue={searchValue}
-        onSearchChange={setSearchValue}
-      />
+      {/* Loading State */}
+      {loading && (
+        <div className="flex justify-center items-center py-12">
+          <RefreshCw className="h-8 w-8 animate-spin text-gray-400" />
+          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading hospitals...</span>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && !loading && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <div className="flex items-center">
+            <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 mr-2" />
+            <span className="text-red-700 dark:text-red-300">Error loading hospitals: {error}</span>
+          </div>
+          <button
+            onClick={fetchHospitals}
+            className="mt-2 bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Data Table */}
+      {!loading && !error && (
+        <Table
+          data={filteredHospitals}
+          columns={columns}
+          searchable
+          searchValue={searchValue}
+          onSearchChange={setSearchValue}
+        />
+      )}
 
       <Modal
         isOpen={isModalOpen}
@@ -194,13 +338,16 @@ export function HospitalManagement() {
         )}
 
         {(modalType === 'edit' || modalType === 'add') && (
-          <form className="space-y-4">
+          <form onSubmit={modalType === 'add' ? handleCreateHospital : handleUpdateHospital} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hospital Name</label>
                 <input
                   type="text"
-                  defaultValue={selectedHospital?.name || ''}
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  required
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
@@ -208,7 +355,10 @@ export function HospitalManagement() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
                 <input
                   type="email"
-                  defaultValue={selectedHospital?.email || ''}
+                  name="email"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  required
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
@@ -216,7 +366,10 @@ export function HospitalManagement() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Phone</label>
                 <input
                   type="tel"
-                  defaultValue={selectedHospital?.phone || ''}
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleInputChange}
+                  required
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
@@ -224,14 +377,20 @@ export function HospitalManagement() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Emergency Contact</label>
                 <input
                   type="tel"
-                  defaultValue={selectedHospital?.emergencyContact || ''}
+                  name="emergencyContact"
+                  value={formData.emergencyContact}
+                  onChange={handleInputChange}
+                  required
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Address</label>
                 <textarea
-                  defaultValue={selectedHospital?.address || ''}
+                  name="address"
+                  value={formData.address}
+                  onChange={handleInputChange}
+                  required
                   rows={3}
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
@@ -240,14 +399,21 @@ export function HospitalManagement() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Search Radius (km)</label>
                 <input
                   type="number"
-                  defaultValue={selectedHospital?.radius || 10}
+                  name="radius"
+                  value={formData.radius}
+                  onChange={handleInputChange}
+                  min="1"
+                  max="100"
+                  required
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Status</label>
                 <select
-                  defaultValue={selectedHospital?.status || 'pending'}
+                  name="status"
+                  value={formData.status}
+                  onChange={handleInputChange}
                   className="mt-1 block w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 >
                   <option value="pending">Pending</option>

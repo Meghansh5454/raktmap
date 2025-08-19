@@ -1,5 +1,6 @@
 const BloodRequest = require('../models/BloodRequest');
 const Donor = require('../models/Donor');
+const ResponseToken = require('../models/ResponseToken');
 const { sendSMS } = require('../services/smsService');
 
 // Function to get compatible blood groups
@@ -39,7 +40,17 @@ const createBloodRequest = async (req, res) => {
 
         // Send SMS to each compatible donor
         for (const donor of donors) {
-            const message = `Urgent blood requirement: ${units} units of ${bloodGroup} blood needed at ${hospital}. Please contact the hospital if you can donate.`;
+            // Generate short token for tracking
+            const responseToken = Math.random().toString(36).substr(2, 8);
+            
+            // Store token mapping in database for tracking
+            await ResponseToken.create({
+                token: responseToken,
+                requestId: bloodRequest._id,
+                donorId: donor._id
+            });
+            
+            const message = `Urgent: ${units} units ${bloodGroup} needed at ${hospital}. Respond: https://donor-location-tracker.onrender.com/r/${responseToken}`;
             
             await sendSMS(donor.phone, message);
             

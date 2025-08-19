@@ -10,9 +10,19 @@ const mongoose = require('mongoose');
 const bloodRequestsRouter = require('./routes/bloodRequests');
 const donorResponseRouter = require('./routes/donorResponse');
 const donorsRouter = require('./routes/donors');
+const hospitalsRouter = require('./routes/hospitals');
+const tokenResponseRouter = require('./routes/tokenResponse');
+const donationHistoryRouter = require('./routes/donationHistory');
 
-const app = express();
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
+const app = express();  
+app.use(cors({ 
+  origin: [
+    'http://localhost:5173', 
+    'http://localhost:5174',
+    'https://donor-location-tracker.onrender.com'
+  ], 
+  credentials: true 
+}));
 app.use(bodyParser.json());
 
 const mongoOptions = {
@@ -72,6 +82,52 @@ function authenticateToken(req, res, next) {
 app.use('/blood-requests', authenticateToken, bloodRequestsRouter);
 app.use('/donor-response', authenticateToken, donorResponseRouter);
 app.use('/donors', authenticateToken, donorsRouter);
+app.use('/hospitals', authenticateToken, hospitalsRouter);
+app.use('/donation-history', authenticateToken, donationHistoryRouter);
+app.use('/', tokenResponseRouter); // Public route for SMS responses
+
+// Public admin routes for dashboard (temporary - should be secured later)
+app.get('/admin/hospitals', async (req, res) => {
+  try {
+    console.log('Fetching hospitals for admin dashboard...');
+    const Hospital = require('./models/Hospital');
+    const hospitals = await Hospital.find({}).sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      message: `Fetched ${hospitals.length} hospitals`,
+      hospitals: hospitals,
+      count: hospitals.length
+    });
+  } catch (error) {
+    console.error('Error fetching hospitals:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch hospitals',
+      error: error.message
+    });
+  }
+});
+
+app.get('/admin/donors', async (req, res) => {
+  try {
+    console.log('Fetching donors for admin dashboard...');
+    const Donor = require('./models/Donor');
+    const donors = await Donor.find({}, { password: 0 }).sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      message: `Fetched ${donors.length} donors`,
+      donors: donors,
+      count: donors.length
+    });
+  } catch (error) {
+    console.error('Error fetching donors:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch donors',
+      error: error.message
+    });
+  }
+});
 
 // Public route for donation history
 app.get('/donation-history', async (req, res) => {
@@ -166,7 +222,153 @@ app.post('/login', async (req, res) => {
 });
 
 /* ============================
-   7. Example Protected Route
+   7. Hospital Profile & Dashboard Routes
+============================ */
+
+// Get hospital profile/dashboard data
+app.get('/hospital/profile', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital') {
+      return res.status(403).json({ message: 'Access denied. Hospital role required.' });
+    }
+
+    const hospital = await Hospital.findById(req.user.id).select('-password');
+    if (!hospital) {
+      return res.status(404).json({ message: 'Hospital not found' });
+    }
+
+    res.json({
+      success: true,
+      hospital: hospital
+    });
+  } catch (error) {
+    console.error('Error fetching hospital profile:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch hospital profile',
+      error: error.message 
+    });
+  }
+});
+
+// Update hospital profile
+app.put('/hospital/profile', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital') {
+      return res.status(403).json({ message: 'Access denied. Hospital role required.' });
+    }
+
+    const { name, email, phone, address, emergencyContact, radius } = req.body;
+    
+    const hospital = await Hospital.findByIdAndUpdate(
+      req.user.id,
+      { name, email, phone, address, emergencyContact, radius },
+      { new: true, select: '-password' }
+    );
+
+    if (!hospital) {
+      return res.status(404).json({ message: 'Hospital not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Hospital profile updated successfully',
+      hospital: hospital
+    });
+  } catch (error) {
+    console.error('Error updating hospital profile:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update hospital profile',
+      error: error.message 
+    });
+  }
+});
+
+// Get hospital dashboard stats
+app.get('/hospital/dashboard/stats', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital') {
+      return res.status(403).json({ message: 'Access denied. Hospital role required.' });
+    }
+
+    const BloodRequest = require('./models/BloodRequest');
+    const Donor = require('./models/Donor');
+    
+    // Get active blood requests for this hospital
+    const activeRequests = await BloodRequest.countDocuments({ 
+      requesterId: req.user.id,
+      status: { $in: ['pending', 'processing'] }
+    });
+
+    // Get total donors (you can filter by location later)
+    const availableDonors = await Donor.countDocuments({ 
+      status: 'available' 
+    });
+
+    // Get completed requests this month
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    const completedThisMonth = await BloodRequest.countDocuments({
+      requesterId: req.user.id,
+      status: 'fulfilled',
+      createdAt: { $gte: currentMonth }
+    });
+
+    // Calculate average response time (mock for now)
+    const averageResponseTime = '12 min';
+
+    res.json({
+      success: true,
+      stats: {
+        activeRequests,
+        availableDonors,
+        completedThisMonth,
+        averageResponseTime
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch dashboard stats',
+      error: error.message 
+    });
+  }
+});
+
+// Get recent blood requests for hospital
+app.get('/hospital/dashboard/recent-requests', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital') {
+      return res.status(403).json({ message: 'Access denied. Hospital role required.' });
+    }
+
+    const BloodRequest = require('./models/BloodRequest');
+    
+    const recentRequests = await BloodRequest.find({ 
+      requesterId: req.user.id 
+    })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .select('bloodGroup units urgency status createdAt');
+
+    res.json({
+      success: true,
+      requests: recentRequests
+    });
+  } catch (error) {
+    console.error('Error fetching recent requests:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch recent requests',
+      error: error.message 
+    });
+  }
+});
+
+/* ============================
+   8. Example Protected Route
 ============================ */
 app.get('/dashboard', authenticateToken, (req, res) => {
   res.json({ message: `Welcome, ${req.user.email}!`, role: req.user.role });
@@ -175,4 +377,10 @@ app.get('/dashboard', authenticateToken, (req, res) => {
 /* ============================
    8. Start Server
 ============================ */
-app.listen(5000, () => console.log('🚀 Server running on port 5000'));
+app.listen(5000, '0.0.0.0', () => {
+  console.log('🚀 Server running on port 5000');
+  console.log('📡 Server accessible from:');
+  console.log('   - Local: http://localhost:5000');
+  console.log('   - Network: http://0.0.0.0:5000');
+  console.log('   - If using ngrok: https://YOUR_NGROK_URL');
+});

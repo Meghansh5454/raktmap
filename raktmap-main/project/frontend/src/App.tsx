@@ -11,6 +11,7 @@ import MainLayout from "./components/Layout/MainLayout";
 import Loader from "./components/Shared/Loader";
 import { useAuth } from "./contexts/AuthContext";
 import { DonorLocationPage } from "./components/Hospital/DonorLocationPage";
+import { DonorTokenResponse } from "./components/Donor/DonorTokenResponse";
 
 const GoodbyeLoader = ({ name }: { name: string }) => (
   <div>
@@ -67,6 +68,9 @@ const App: React.FC = () => {
       <Routes>
         {/* Public route for donors to share location from an SMS link */}
         <Route path="/donor-location/:requestId/:donorId" element={<DonorLocationPage />} />
+        
+        {/* Public route for donors to respond to SMS tokens */}
+        <Route path="/r/:token" element={<DonorTokenResponse />} />
 
         <Route path="/login" element={<LoginForm />} />
         <Route
