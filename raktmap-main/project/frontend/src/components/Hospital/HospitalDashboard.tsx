@@ -38,15 +38,9 @@ export function HospitalDashboard() {
     averageResponseTime: '0 min'
   });
   const [recentRequests, setRecentRequests] = useState<BloodRequest[]>([]);
+  const [respondingDonors, setRespondingDonors] = useState<RespondingDonor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Static responding donors for now - can be made dynamic later
-  const respondingDonors: RespondingDonor[] = [
-    { id: 1, name: 'John Doe', bloodGroup: 'O-', distance: '2.3 km', phone: '+1 234-567-8901', status: 'confirmed' },
-    { id: 2, name: 'Jane Smith', bloodGroup: 'A+', distance: '1.8 km', phone: '+1 234-567-8902', status: 'responded' },
-    { id: 3, name: 'Mike Johnson', bloodGroup: 'B+', distance: '3.1 km', phone: '+1 234-567-8903', status: 'contacted' },
-  ];
 
   useEffect(() => {
     fetchDashboardData();
@@ -57,21 +51,84 @@ export function HospitalDashboard() {
       setLoading(true);
       setError(null);
 
+      const token = localStorage.getItem('token');
+      const config = {
+        headers: { Authorization: `Bearer ${token}` }
+      };
+
       // Fetch dashboard stats
-      const statsResponse = await axios.get('/hospital/dashboard/stats');
+      const statsResponse = await axios.get('http://localhost:5000/hospital/dashboard/stats', config);
       if (statsResponse.data.success) {
         setStats(statsResponse.data.stats);
       }
 
       // Fetch recent requests
-      const requestsResponse = await axios.get('/hospital/dashboard/recent-requests');
+      const requestsResponse = await axios.get('http://localhost:5000/hospital/dashboard/recent-requests', config);
       if (requestsResponse.data.success) {
         setRecentRequests(requestsResponse.data.requests);
+      }
+
+      // Fetch responding donors
+      try {
+        const donorResponsesResponse = await axios.get('http://localhost:5000/donor-response/locations');
+        if (donorResponsesResponse.data.success) {
+          const responses = donorResponsesResponse.data.responses || [];
+          const formattedDonors: RespondingDonor[] = responses.slice(0, 5).map((donor: any, index: number) => ({
+            id: index + 1,
+            name: donor.name || 'Unknown Donor',
+            bloodGroup: donor.bloodGroup || 'Unknown',
+            distance: donor.location ? '2.5 km' : 'N/A', // Mock distance calculation
+            phone: donor.phone || 'N/A',
+            status: donor.status || 'responded'
+          }));
+          setRespondingDonors(formattedDonors);
+        }
+      } catch (donorErr) {
+        console.log('Failed to fetch responding donors, using fallback data');
+        setRespondingDonors([
+          { id: 1, name: 'John Doe', bloodGroup: 'O-', distance: '2.3 km', phone: '+1 234-567-8901', status: 'confirmed' },
+          { id: 2, name: 'Jane Smith', bloodGroup: 'A+', distance: '1.8 km', phone: '+1 234-567-8902', status: 'responded' },
+          { id: 3, name: 'Mike Johnson', bloodGroup: 'B+', distance: '3.1 km', phone: '+1 234-567-8903', status: 'contacted' },
+        ]);
       }
 
     } catch (err: any) {
       console.error('Error fetching dashboard data:', err);
       setError(err.response?.data?.message || 'Failed to fetch dashboard data');
+      
+      // Fallback to mock data for development
+      setStats({
+        activeRequests: 3,
+        availableDonors: 15,
+        completedThisMonth: 8,
+        averageResponseTime: '12 min'
+      });
+      
+      setRecentRequests([
+        {
+          _id: 'mock1',
+          bloodGroup: 'O-',
+          units: 2,
+          urgency: 'high',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        },
+        {
+          _id: 'mock2',
+          bloodGroup: 'A+',
+          units: 1,
+          urgency: 'medium',
+          status: 'fulfilled',
+          createdAt: new Date(Date.now() - 86400000).toISOString()
+        }
+      ]);
+      
+      // Fallback responding donors
+      setRespondingDonors([
+        { id: 1, name: 'John Doe', bloodGroup: 'O-', distance: '2.3 km', phone: '+1 234-567-8901', status: 'confirmed' },
+        { id: 2, name: 'Jane Smith', bloodGroup: 'A+', distance: '1.8 km', phone: '+1 234-567-8902', status: 'responded' },
+        { id: 3, name: 'Mike Johnson', bloodGroup: 'B+', distance: '3.1 km', phone: '+1 234-567-8903', status: 'contacted' },
+      ]);
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,6 @@
 import 'leaflet/dist/leaflet.css';
 import React, { useEffect } from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import LoginForm from "./components/Shared/LoginForm";
@@ -36,16 +36,33 @@ const GoodbyeLoader = ({ name }: { name: string }) => (
 );
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  
+  // Show loading while authentication is being checked
+  if (loading) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        flexDirection: 'column'
+      }}>
+        <div>Checking authentication...</div>
+      </div>
+    );
+  }
+  
+  // Only redirect if we're done loading and there's no user
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+  
   return <>{children}</>;
 }
 
 const App: React.FC = () => {
   const { loadingLogout, userName, user } = useAuth();
-  const navigate = useNavigate();
 
   if (loadingLogout && userName) {
     return <GoodbyeLoader name={userName} />;

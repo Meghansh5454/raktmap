@@ -1,59 +1,82 @@
-import React, { useState } from 'react';
-import { Bell, MessageSquare, Heart, CheckCircle, Clock, Filter, MoreVertical } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Bell, MessageSquare, Heart, CheckCircle, Clock, MoreVertical } from 'lucide-react';
 import { Notification } from '../../types';
+
+// Helper function to decode JWT and extract hospital ID
+const getHospitalIdFromToken = (): string | null => {
+  const token = localStorage.getItem('token');
+  if (!token) return null;
+  
+  try {
+    // Decode JWT payload (middle part after splitting by dots)
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+    
+    const decoded = JSON.parse(jsonPayload);
+    return decoded.id || null;
+  } catch (error) {
+    console.error('Failed to decode token:', error);
+    return null;
+  }
+};
 
 export function NotificationCenter() {
   const [selectedFilter, setSelectedFilter] = useState('all');
-  const [notifications, setNotifications] = useState<Notification[]>([
-    {
-      id: '1',
-      title: 'SMS Sent Successfully',
-      message: '15 donors have been notified about your O- blood request',
-      type: 'info',
-      createdAt: '2024-01-21T10:30:00Z',
-      read: false
-    },
-    {
-      id: '2',
-      title: 'Donor Confirmed',
-      message: 'John Doe (O-) has confirmed availability for donation',
-      type: 'success',
-      createdAt: '2024-01-21T09:15:00Z',
-      read: false
-    },
-    {
-      id: '3',
-      title: 'Blood Request Fulfilled',
-      message: 'Your A+ blood request has been successfully fulfilled',
-      type: 'success',
-      createdAt: '2024-01-20T16:45:00Z',
-      read: true
-    },
-    {
-      id: '4',
-      title: 'Urgent Request Alert',
-      message: 'Emergency B- blood request requires immediate attention',
-      type: 'error',
-      createdAt: '2024-01-20T14:20:00Z',
-      read: true
-    },
-    {
-      id: '5',
-      title: 'Donor Response Received',
-      message: 'Jane Smith has responded to your blood donation request',
-      type: 'info',
-      createdAt: '2024-01-20T11:30:00Z',
-      read: true
-    },
-    {
-      id: '6',
-      title: 'Request Update',
-      message: 'Your blood request status has been updated to "In Progress"',
-      type: 'warning',
-      createdAt: '2024-01-19T15:10:00Z',
-      read: true
-    }
-  ]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const hospitalId = getHospitalIdFromToken() || 'demo-hospital'; // extract from JWT
+
+  const fetchNotifications = async () => {
+    try {
+      setLoading(true); setError(null);
+      const res = await fetch(`http://localhost:5000/notifications/${hospitalId}`);
+      const data = await res.json();
+      if (data.success) {
+        setNotifications(data.notifications.map((n: any) => ({
+          id: n._id,
+          title: n.title,
+            message: n.message,
+            type: n.type,
+            createdAt: n.createdAt,
+            read: n.read
+        })));
+      } else {
+        setError(data.message || 'Failed to load');
+      }
+    } catch (e:any) {
+      setError(e.message);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchNotifications(); }, []);
+  // Real-time SSE subscription
+  useEffect(() => {
+    const source = new EventSource(`http://localhost:5000/notifications/stream/${hospitalId}`);
+    source.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'notification' && data.notification) {
+          setNotifications(prev => [
+            {
+              id: data.notification._id,
+              title: data.notification.title,
+              message: data.notification.message,
+              type: data.notification.type,
+              createdAt: data.notification.createdAt,
+              read: data.notification.read
+            },
+            ...prev
+          ]);
+        }
+      } catch {}
+    };
+    source.onerror = () => { /* silently ignore */ };
+    return () => source.close();
+  }, [hospitalId]);
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -96,19 +119,17 @@ export function NotificationCenter() {
     }
   });
 
-  const markAsRead = (id: string) => {
-    setNotifications(notifications.map(notification =>
-      notification.id === id ? { ...notification, read: true } : notification
-    ));
+  const markAsRead = async (id: string) => {
+    setNotifications(n => n.map(notif => notif.id === id ? { ...notif, read: true } : notif));
+    try { await fetch(`http://localhost:5000/notifications/${id}/read`, { method: 'POST' }); } catch {}
   };
 
-  const markAllAsRead = () => {
-    setNotifications(notifications.map(notification => ({ ...notification, read: true })));
+  const markAllAsRead = async () => {
+    setNotifications(n => n.map(notif => ({ ...notif, read: true })));
+    try { await fetch(`http://localhost:5000/notifications/${hospitalId}/read-all`, { method: 'POST' }); } catch {}
   };
 
-  const deleteNotification = (id: string) => {
-    setNotifications(notifications.filter(notification => notification.id !== id));
-  };
+  // deleteNotification function removed (not used yet)
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -123,12 +144,21 @@ export function NotificationCenter() {
             </span>
           )}
         </div>
-        <button
-          onClick={markAllAsRead}
-          className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
-        >
-          Mark all as read
-        </button>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={fetchNotifications}
+            className="text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-white"
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+          <button
+            onClick={markAllAsRead}
+            disabled={!notifications.some(n=>!n.read)}
+            className="text-sm text-blue-600 disabled:opacity-40 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+          >
+            Mark all as read
+          </button>
+        </div>
       </div>
 
       {/* Filter Tabs */}
@@ -157,7 +187,13 @@ export function NotificationCenter() {
 
         {/* Notifications List */}
         <div className="divide-y divide-gray-200 dark:divide-gray-700">
-          {filteredNotifications.map((notification) => (
+          {loading && (
+            <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">Loading notifications...</div>
+          )}
+          {error && !loading && (
+            <div className="p-4 text-sm text-red-600 dark:text-red-400">{error}</div>
+          )}
+          {!loading && !error && filteredNotifications.map((notification) => (
             <div
               key={notification.id}
               className={`p-4 border-l-4 ${getNotificationColor(notification.type)} ${
@@ -211,7 +247,7 @@ export function NotificationCenter() {
           ))}
         </div>
 
-        {filteredNotifications.length === 0 && (
+  {!loading && !error && filteredNotifications.length === 0 && (
           <div className="text-center py-12">
             <Bell className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <p className="text-gray-500 dark:text-gray-400">No notifications found</p>

@@ -13,6 +13,8 @@ const donorsRouter = require('./routes/donors');
 const hospitalsRouter = require('./routes/hospitals');
 const tokenResponseRouter = require('./routes/tokenResponse');
 const donationHistoryRouter = require('./routes/donationHistory');
+const Notification = require('./models/Notification');
+const { addClient: addNotificationClient, broadcastNotification } = require('./utils/notificationStream');
 
 const app = express();  
 app.use(cors({ 
@@ -23,7 +25,8 @@ app.use(cors({
   ], 
   credentials: true 
 }));
-app.use(bodyParser.json());
+// Increase JSON limit to support larger bulk imports
+app.use(bodyParser.json({ limit: '2mb' }));
 
 const mongoOptions = {
   retryWrites: true,
@@ -86,6 +89,15 @@ app.use('/hospitals', authenticateToken, hospitalsRouter);
 app.use('/donation-history', authenticateToken, donationHistoryRouter);
 app.use('/', tokenResponseRouter); // Public route for SMS responses
 
+// Add token validation test route
+app.get('/validate-token', authenticateToken, (req, res) => {
+  res.json({
+    valid: true,
+    user: req.user,
+    message: 'Token is valid'
+  });
+});
+
 // Public admin routes for dashboard (temporary - should be secured later)
 app.get('/admin/hospitals', async (req, res) => {
   try {
@@ -126,6 +138,266 @@ app.get('/admin/donors', async (req, res) => {
       message: 'Failed to fetch donors',
       error: error.message
     });
+  }
+});
+
+// ================= Notification Endpoints (basic) =================
+// List notifications for hospital (public temporary; add auth later)
+app.get('/notifications/:hospitalId', async (req, res) => {
+  try {
+    const { hospitalId } = req.params;
+    const { filter } = req.query; // optional: unread
+    // Gracefully handle placeholder / demo ids that are not valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(hospitalId)) {
+      return res.json({ success: true, notifications: [], note: 'hospitalId not a valid ObjectId; returning empty list' });
+    }
+    const query = { hospitalId };
+    if (filter === 'unread') query.read = false;
+    const items = await Notification.find(query).sort({ createdAt: -1 }).limit(200);
+    res.json({ success: true, notifications: items });
+  } catch (e) {
+    console.error('Fetch notifications error', e);
+    res.status(500).json({ success: false, message: 'Failed to fetch notifications' });
+  }
+});
+
+// Mark one as read
+app.post('/notifications/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await Notification.findByIdAndUpdate(id, { read: true }, { new: true });
+    if (!doc) return res.status(404).json({ success: false, message: 'Not found' });
+    res.json({ success: true, notification: doc });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Failed to mark read' });
+  }
+});
+
+// Mark all read for hospital
+app.post('/notifications/:hospitalId/read-all', async (req, res) => {
+  try {
+    const { hospitalId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(hospitalId)) {
+      return res.json({ success: true, modified: 0, note: 'hospitalId not a valid ObjectId; nothing to mark' });
+    }
+    const result = await Notification.updateMany({ hospitalId, read: false }, { $set: { read: true } });
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Failed to mark all read' });
+  }
+});
+
+// Create a test notification (for development)
+app.post('/notifications/:hospitalId/test', async (req, res) => {
+  try {
+    const { hospitalId } = req.params;
+    const { type='info', title='Test Notification', message='Test message' } = req.body || {};
+    let doc;
+    if (mongoose.Types.ObjectId.isValid(hospitalId)) {
+      doc = await Notification.create({ hospitalId, type, title, message });
+    } else {
+      // Ephemeral (not persisted) notification for demo/non-authenticated usage
+      doc = { _id: `ephemeral-${Date.now()}`, hospitalId, type, title, message, read: false, createdAt: new Date() };
+    }
+    broadcastNotification(doc);
+    res.json({ success: true, notification: doc, persisted: !!doc?.save });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Failed to create test notification' });
+  }
+});
+
+// Server-Sent Events stream for notifications
+app.get('/notifications/stream/:hospitalId', (req, res) => {
+  const { hospitalId } = req.params;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  res.write(`data: ${JSON.stringify({ type: 'hello', hospitalId })}\n\n`);
+  addNotificationClient(hospitalId, res);
+});
+
+// Bulk import donors (CSV parsed client-side -> JSON). Public for now; should add auth later.
+app.post('/admin/donors/import', async (req, res) => {
+  try {
+    console.log('➡️  /admin/donors/import request received');
+    const Donor = require('./models/Donor');
+    const bcrypt = require('bcryptjs');
+    const { donors } = req.body || {};
+    if (!Array.isArray(donors)) {
+      return res.status(400).json({ success: false, message: 'Invalid payload: donors array required' });
+    }
+    console.log(`Processing ${donors.length} donor rows`);
+
+    const allowedBloodGroups = new Set(['A+','A-','B+','B-','AB+','AB-','O+','O-','NK']);
+    const normalizeBloodGroup = (value) => {
+      if (!value) return '';
+      return String(value).toUpperCase().replace(/\s+/g,'').trim(); // remove internal spaces e.g. 'AB +' -> 'AB+'
+    };
+
+    // Helper to sanitize a header/key for matching
+    const sanitizeKey = (k='') => k.replace(/\uFEFF/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+
+    // Variants map (normalized -> canonical field name)
+    const variantGroups = {
+      name: ['name','fullname','donorname','studentname'],
+      email: ['email','mail','emailid','e'],
+      phone: ['phone','phoneno','mobileno','mobile','contact','contactno','number','phoneNumber'.toLowerCase()],
+      bloodGroup: ['bloodgroup','bloodgrp','blood','bgroup','bloodtype','bloodgrpup'],
+      rollNo: ['rollno','rollnumber','roll','enrollment','enrollmentno','enroll','studentid','id','studentnumber']
+    };
+
+    // Build reverse lookup: normalized variant -> canonical
+    const variantLookup = {};
+    Object.entries(variantGroups).forEach(([canonical, variants]) => {
+      variants.forEach(v => variantLookup[sanitizeKey(v)] = canonical);
+    });
+
+    const results = [];
+    const credentials = [];
+    let inserted = 0;
+    let skipped = 0;
+  // Preload existing donors for duplicate detection
+  const existingDocs = await Donor.find({}, 'email name bloodGroup phone rollNo').lean();
+  const normName = (v='') => String(v).toLowerCase().trim().replace(/\s+/g,' ');
+  const existingEmails = new Set(existingDocs.map(d => d.email));
+  const existingNameGroup = new Set(existingDocs.map(d => `${normName(d.name)}|${normalizeBloodGroup(d.bloodGroup)}`));
+  const existingPhones = new Set(existingDocs.filter(d=>d.phone).map(d=>String(d.phone).trim()));
+  const existingRolls = new Set(existingDocs.filter(d=>d.rollNo).map(d=>String(d.rollNo).trim().toLowerCase()));
+  // Track duplicates inside this import batch
+  const batchEmails = new Set();
+  const batchNameGroup = new Set();
+  const batchPhones = new Set();
+  const batchRolls = new Set();
+    for (let i = 0; i < donors.length; i++) {
+      const rawOriginal = donors[i] || {};
+      // Map row keys using sanitization
+      const mapped = {};
+      Object.keys(rawOriginal).forEach(k => {
+        const sk = sanitizeKey(k);
+        const canonical = variantLookup[sk];
+        if (canonical) {
+          if (mapped[canonical] === undefined) mapped[canonical] = rawOriginal[k];
+        } else {
+          // If header already exactly matches expected canonical (after sanitize) keep it
+          if (['name','email','phone','bloodGroup','rollNo'].includes(k)) mapped[k] = rawOriginal[k];
+        }
+      });
+
+      const nameRaw = mapped.name || rawOriginal.name;
+      const emailRaw = mapped.email || rawOriginal.email;
+      const phoneRaw = mapped.phone || rawOriginal.phone;
+      const rawGroup = mapped.bloodGroup || rawOriginal.bloodGroup || rawOriginal['blood group'];
+      const rollNoRaw = mapped.rollNo || rawOriginal.rollNo;
+      const lineInfo = { index: i + 1, email: emailRaw };
+
+      if (!nameRaw || !emailRaw || !phoneRaw || !rawGroup) {
+        results.push({ ...lineInfo, status: 'error', reason: 'Missing required field (name,email,phone,bloodGroup)' });
+        skipped++; continue;
+      }
+
+      const email = String(emailRaw).toLowerCase().trim();
+      const bloodGroup = normalizeBloodGroup(rawGroup);
+      if (!allowedBloodGroups.has(bloodGroup)) {
+        results.push({ ...lineInfo, status: 'error', reason: `Invalid blood group: ${bloodGroup}` });
+        skipped++; continue;
+      }
+  const nameGroupKey = `${normName(nameRaw)}|${bloodGroup}`;
+  const phoneKey = phoneRaw ? String(phoneRaw).trim() : '';
+  const rollKey = rollNoRaw ? String(rollNoRaw).trim().toLowerCase() : '';
+
+  // Existing DB duplicates
+  if (existingEmails.has(email)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate (email exists)' }); skipped++; continue; }
+  if (existingNameGroup.has(nameGroupKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate (name+bloodGroup exists)' }); skipped++; continue; }
+  if (phoneKey && existingPhones.has(phoneKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate (phone exists)' }); skipped++; continue; }
+  if (rollKey && existingRolls.has(rollKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate (rollNo exists)' }); skipped++; continue; }
+
+  // Duplicates within current file
+  if (batchEmails.has(email)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate in file (email)' }); skipped++; continue; }
+  if (batchNameGroup.has(nameGroupKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate in file (name+bloodGroup)' }); skipped++; continue; }
+  if (phoneKey && batchPhones.has(phoneKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate in file (phone)' }); skipped++; continue; }
+  if (rollKey && batchRolls.has(rollKey)) { results.push({ ...lineInfo, status: 'skipped', reason: 'Duplicate in file (rollNo)' }); skipped++; continue; }
+
+  // Reserve keys now that row is accepted
+  batchEmails.add(email); batchNameGroup.add(nameGroupKey);
+  if (phoneKey) batchPhones.add(phoneKey); if (rollKey) batchRolls.add(rollKey);
+      const tempPassword = Math.random().toString(36).slice(-8);
+      const hashed = await bcrypt.hash(tempPassword, 10);
+      const donorDoc = new Donor({
+        name: String(nameRaw).trim(),
+        email,
+        phone: String(phoneRaw).trim(),
+        bloodGroup,
+        rollNo: rollNoRaw ? String(rollNoRaw).trim() : undefined,
+        password: hashed
+      });
+      try {
+        await donorDoc.save();
+        inserted++;
+        credentials.push({ email, tempPassword });
+        results.push({ ...lineInfo, status: 'inserted' });
+      } catch (err) {
+        console.error('Error saving donor row', i + 1, err.message);
+        results.push({ ...lineInfo, status: 'error', reason: err.message });
+        skipped++;
+      }
+    }
+    res.json({ success: true, message: 'Import processed', inserted, skipped, total: donors.length, results, credentialsCount: credentials.length, credentials });
+    try {
+      const notif = await Notification.create({
+        type: 'success',
+        title: 'Donor Import Completed',
+        message: `${inserted} added, ${skipped} skipped (total ${donors.length})`,
+        read: false
+      });
+      broadcastNotification(notif);
+    } catch (e) { console.error('Failed to broadcast import notification', e); }
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ success: false, message: 'Failed to import donors', error: error.message });
+  }
+});
+
+// Bulk delete donors: provide { all: true } to delete all, or { ids: [..] }
+app.delete('/admin/donors', async (req, res) => {
+  try {
+    const Donor = require('./models/Donor');
+    const { all, ids } = req.body || {};
+    if (all) {
+      const count = await Donor.countDocuments();
+      await Donor.deleteMany({});
+  const payload = { success: true, deleted: count, all: true };
+      try {
+        const notif = await Notification.create({
+          type: 'warning',
+          title: 'All Donors Deleted',
+          message: `${count} donor records removed`,
+          read: false
+        });
+        broadcastNotification(notif);
+      } catch(e){ console.error('Broadcast delete all donors failed', e);}
+      return res.json(payload);
+    }
+    if (Array.isArray(ids) && ids.length) {
+      const result = await Donor.deleteMany({ _id: { $in: ids } });
+  const deleted = result.deletedCount || 0;
+      try {
+        const notif = await Notification.create({
+          type: 'warning',
+          title: 'Donors Deleted',
+          message: `${deleted} selected donor(s) removed`,
+          read: false
+        });
+        broadcastNotification(notif);
+      } catch(e){ console.error('Broadcast delete selected donors failed', e);}
+      return res.json({ success: true, deleted, all: false });
+    }
+    return res.status(400).json({ success: false, message: 'Provide all:true or ids array' });
+  } catch (error) {
+    console.error('Bulk delete donors error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete donors', error: error.message });
   }
 });
 

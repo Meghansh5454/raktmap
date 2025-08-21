@@ -4,6 +4,8 @@ const BloodRequest = require('../models/BloodRequest');
 const Donor = require('../models/Donor'); // Ensure this line is present
 const ResponseToken = require('../models/ResponseToken');
 const { sendSMS } = require('../services/smsService');
+const Notification = require('../models/Notification');
+const { broadcastNotification } = require('../utils/notificationStream');
 
 // Create a new blood request
 router.post('/', async (req, res) => {
@@ -24,6 +26,18 @@ router.post('/', async (req, res) => {
     });
 
     await bloodRequest.save();
+
+    // Create notification for hospital
+    try {
+      const doc = await Notification.create({
+        hospitalId: hospital.id,
+        type: 'info',
+        title: 'Blood Request Created',
+        message: `${quantity} unit(s) of ${bloodGroup} requested (urgency: ${urgency})`,
+        meta: { bloodRequestId: bloodRequest._id }
+      });
+      broadcastNotification(doc);
+    } catch (e) { console.error('Failed to create notification:', e.message); }
 
     // Debug: Log normalized blood group
     const normalizedBloodGroup = bloodGroup.replace(/\s+/g, '').toUpperCase();
@@ -74,11 +88,46 @@ router.post('/', async (req, res) => {
           await sendSMS(donorPhone, message);
           smsSuccessCount++;
           console.log(`SMS sent successfully to donor: ${donorName} (${donorPhone})`);
+          try {
+            const notif = await Notification.create({
+              hospitalId: hospital.id,
+              type: 'info',
+              title: 'SMS Sent',
+              message: `SMS sent to ${donorName} (${bloodGroup})`,
+              read: false,
+              meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
+            });
+            broadcastNotification(notif);
+          } catch (e) { console.error('Broadcast SMS sent notification failed', e); }
         } catch (error) {
           console.error(`Failed to send SMS to donor ${donorName}:`, error);
+          try {
+            const notif = await Notification.create({
+              hospitalId: hospital.id,
+              type: 'error',
+              title: 'SMS Failed',
+              message: `Failed to send SMS to ${donorName}`,
+              read: false,
+              meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
+            });
+            broadcastNotification(notif);
+          } catch (_) {}
         }
       }
     }
+
+    // Summary notification (ephemeral) after loop
+    try {
+      const notif = await Notification.create({
+        hospitalId: hospital.id,
+        type: 'success',
+        title: 'SMS Dispatch Complete',
+        message: `${smsSuccessCount}/${matchingDonors.length} SMS delivered for ${bloodGroup}`,
+        read: false,
+        meta: { bloodRequestId: bloodRequest._id }
+      });
+      broadcastNotification(notif);
+    } catch (e) { console.error('Broadcast SMS summary failed', e); }
 
     // Send response with SMS status
     res.status(201).json({
@@ -88,7 +137,8 @@ router.post('/', async (req, res) => {
         totalDonors: matchingDonors.length,
         smsDelivered: smsSuccessCount,
         bloodGroup: bloodGroup
-      }
+  },
+  bloodRequestId: bloodRequest._id
     });
 
   } catch (error) {
@@ -140,6 +190,62 @@ router.get('/all', async (req, res) => {
       success: false,
       message: 'Failed to fetch blood requests'
     });
+  }
+});
+
+// PUT /blood-requests/:id - Update a blood request
+router.put('/:id', async (req, res) => {
+  try {
+    const bloodRequest = await BloodRequest.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!bloodRequest) {
+      return res.status(404).json({ success: false, message: 'Blood request not found' });
+    }
+    
+    // Create notification for blood request update
+    try {
+      const notif = await Notification.create({
+        hospitalId: bloodRequest.hospitalId,
+        type: 'info',
+        title: 'Blood Request Updated',
+        message: `Blood request for ${bloodRequest.bloodGroup} (${bloodRequest.quantity} units) was updated`,
+        read: false,
+        meta: { bloodRequestId: bloodRequest._id }
+      });
+      broadcastNotification(notif);
+    } catch (e) { console.error('Failed to create blood request update notification:', e.message); }
+    
+    res.json({ success: true, message: 'Blood request updated successfully', bloodRequest });
+  } catch (error) {
+    console.error('Error updating blood request:', error);
+    res.status(500).json({ success: false, message: 'Failed to update blood request' });
+  }
+});
+
+// DELETE /blood-requests/:id - Delete a blood request
+router.delete('/:id', async (req, res) => {
+  try {
+    const bloodRequest = await BloodRequest.findByIdAndDelete(req.params.id);
+    if (!bloodRequest) {
+      return res.status(404).json({ success: false, message: 'Blood request not found' });
+    }
+    
+    // Create notification for blood request deletion
+    try {
+      const notif = await Notification.create({
+        hospitalId: bloodRequest.hospitalId,
+        type: 'warning',
+        title: 'Blood Request Deleted',
+        message: `Blood request for ${bloodRequest.bloodGroup} (${bloodRequest.quantity} units) was deleted`,
+        read: false,
+        meta: { bloodRequestId: bloodRequest._id }
+      });
+      broadcastNotification(notif);
+    } catch (e) { console.error('Failed to create blood request deletion notification:', e.message); }
+    
+    res.json({ success: true, message: 'Blood request deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting blood request:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete blood request' });
   }
 });
 

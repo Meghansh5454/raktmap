@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Users, Filter, RefreshCw, Navigation } from 'lucide-react';
+import { MapPin, Users, Filter, RefreshCw, Navigation, Maximize, X } from 'lucide-react';
 import { CharusatMap } from '../Hospital/CharusatMap';
 import axios from 'axios';
 
@@ -37,9 +37,15 @@ export function LiveMap() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Hospital location (Charusat University) - UPDATED TO CORRECT COORDINATES
   const hospitalLocation = { lat: 22.6013, lng: 72.8327 };
+
+  // Toggle fullscreen mode
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
 
   // Blood group compatibility function - FIXED LOGIC
   const getCompatibleBloodGroups = (requestedBloodGroup: string): string[] => {
@@ -703,8 +709,18 @@ export function LiveMap() {
                   </select>
                 </div>
 
-                {/* Distance Legend */}
+                {/* Distance Legend and Fullscreen Button */}
                 <div className="flex items-center space-x-4">
+                  {/* Fullscreen Button */}
+                  <button
+                    onClick={toggleFullscreen}
+                    className="flex items-center space-x-1 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                    title="Open Fullscreen Map"
+                  >
+                    <Maximize className="h-4 w-4" />
+                    <span>Fullscreen</span>
+                  </button>
+                  
                   <div className="flex items-center space-x-2">
                     <div className="w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow-sm"></div>
                     <span className="text-xs text-gray-600 dark:text-gray-400">Near (≤5km)</span>
@@ -888,6 +904,138 @@ export function LiveMap() {
           </div>
         </div>
       </div>
+
+      {/* Fullscreen Map Modal */}
+      {isFullscreen && (
+        <div className="fixed inset-0 z-[9999] bg-black bg-opacity-75 flex items-center justify-center">
+          <div className="w-full h-full bg-white dark:bg-gray-800 relative overflow-hidden">
+            {/* Fullscreen Map Header */}
+            <div className="absolute top-0 left-0 right-0 z-[10000] bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white">Live User Map - Fullscreen</h2>
+                  
+                  {/* Quick controls in fullscreen */}
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Radius:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="100"
+                      value={radiusFilter}
+                      onChange={(e) => setRadiusFilter(parseInt(e.target.value))}
+                      className="w-32"
+                    />
+                    <span className="text-sm text-gray-600 dark:text-gray-400">{radiusFilter}km</span>
+                  </div>
+                  
+                  <select
+                    value={selectedRequest}
+                    onChange={(e) => setSelectedRequest(e.target.value)}
+                    className="text-sm border border-gray-300 dark:border-gray-600 rounded px-3 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    {bloodRequests.map((request) => (
+                      <option key={request._id} value={request._id}>
+                        {request._id === 'all-locations' ? 'All User Locations' : `${request.bloodGroup} - ${new Date(request.createdAt).toLocaleDateString()}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Close button */}
+                <button
+                  onClick={toggleFullscreen}
+                  className="flex items-center space-x-1 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors z-[10001]"
+                  title="Close Fullscreen"
+                >
+                  <X className="h-4 w-4" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+            
+            {/* Fullscreen Map Content */}
+            <div className="absolute inset-0 pt-20 pb-20 z-[9998]">
+              {(() => {
+                const mapDonors = filteredDonors.map(d => ({
+                  id: parseInt(d._id.slice(-6), 16) || Math.random() * 1000000,
+                  name: d.name || 'Unknown',
+                  lat: d.lat || 0,
+                  lng: d.lng || 0,
+                  bloodGroup: d.bloodGroup || 'Unknown',
+                  seen: true,
+                  distance: d.distance
+                }));
+                
+                return filteredDonors.length > 0 ? (
+                  <div className="w-full h-full">
+                    <CharusatMap donors={mapDonors} />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full bg-gray-100 dark:bg-gray-900 text-gray-500">
+                    <div className="text-center">
+                      <MapPin className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                      <p className="text-xl">No users found</p>
+                      <p className="text-sm">Total loaded: {donorResponses.length}, Radius: {radiusFilter}km</p>
+                      <button 
+                        onClick={() => setRadiusFilter(100)}
+                        className="mt-4 text-sm bg-blue-100 text-blue-700 px-4 py-2 rounded hover:bg-blue-200"
+                      >
+                        Increase Radius to 100km
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            
+            {/* Stats overlay in fullscreen */}
+            <div className="absolute bottom-0 left-0 right-0 z-[10000] p-4 bg-white dark:bg-gray-800 bg-opacity-95 dark:bg-opacity-95 border-t border-gray-200 dark:border-gray-700">
+              <div className="grid grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">Total Users</p>
+                      <p className="text-xl font-bold text-gray-900 dark:text-white">{filteredDonors.length}</p>
+                    </div>
+                    <Users className="h-6 w-6 text-blue-600" />
+                  </div>
+                </div>
+                
+                <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">Very Close (&lt;2km)</p>
+                      <p className="text-xl font-bold text-green-600">{filteredDonors.filter(d => d.distance < 2).length}</p>
+                    </div>
+                    <div className="w-6 h-6 rounded-full bg-green-500"></div>
+                  </div>
+                </div>
+                
+                <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">Near (≤5km)</p>
+                      <p className="text-xl font-bold text-green-600">{filteredDonors.filter(d => d.distance <= 5).length}</p>
+                    </div>
+                    <div className="w-6 h-6 rounded-full bg-green-500"></div>
+                  </div>
+                </div>
+                
+                <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">Far (&gt;5km)</p>
+                      <p className="text-xl font-bold text-red-600">{filteredDonors.filter(d => d.distance > 5).length}</p>
+                    </div>
+                    <div className="w-6 h-6 rounded-full bg-red-500"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

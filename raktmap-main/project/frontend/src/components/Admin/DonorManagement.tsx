@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, MessageSquare, UserX, Filter, Download, Eye, Edit, Trash2, RefreshCw, XCircle } from 'lucide-react';
+import { Users, Download, Eye, Edit, Trash2, RefreshCw, XCircle, Upload } from 'lucide-react';
 import { Table } from '../Shared/Table';
 import { Modal } from '../Shared/Modal';
 import { Donor } from '../../types';
@@ -24,6 +24,9 @@ export function DonorManagement() {
     address: '',
     status: 'available'
   });
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState<any | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Fetch donors from API
   const fetchDonors = async () => {
@@ -60,8 +63,8 @@ export function DonorManagement() {
           email: selectedDonor.email,
           phone: selectedDonor.phone,
           bloodGroup: selectedDonor.bloodGroup,
-          address: selectedDonor.address,
-          status: selectedDonor.status
+          address: selectedDonor.address || '',
+          status: selectedDonor.status || 'available'
         });
       }
     }
@@ -214,10 +217,7 @@ export function DonorManagement() {
     return matchesSearch && matchesBloodGroup && matchesStatus;
   });
 
-  const handleBulkAction = (action: string) => {
-    console.log(`Bulk action ${action} for donors:`, selectedDonors);
-    // Handle bulk actions
-  };
+  // (Removed old bulk action handler – now only bulk delete is supported)
 
   const handleSelectAll = () => {
     if (selectedDonors.length === filteredDonors.length) {
@@ -225,6 +225,123 @@ export function DonorManagement() {
     } else {
       setSelectedDonors(filteredDonors.map(donor => donor._id));
     }
+  };
+
+  // Build CSV from current donors and trigger download
+  const handleExport = () => {
+    if (!donors.length) return;
+    const headers = ['name','email','phone','bloodGroup','rollNo'];
+    const lines = [headers.join(',')];
+    donors.forEach(d => {
+      const row = [d.name, d.email, d.phone, d.bloodGroup, d.rollNo || '']
+        .map(value => {
+          if (value == null) return '';
+          const needsQuote = /[",\n]/.test(String(value));
+          let v = String(value).replace(/"/g, '""');
+            return needsQuote ? `"${v}"` : v;
+        });
+      lines.push(row.join(','));
+    });
+    const csv = lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `donors_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Trigger hidden file input
+  const triggerImport = () => {
+    setImportSummary(null);
+    fileInputRef.current?.click();
+  };
+
+  // Very small CSV parser (no external lib)
+  const parseCSV = (text: string) => {
+    const clean = text.replace(/\uFEFF/g,'');
+    const rawLines = clean.split(/\r?\n/);
+    const lines = rawLines.filter(l => l.trim().length > 0);
+    if (!lines.length) return [];
+    // parse header line with quotes
+    const headerLine = lines[0];
+    const headers: string[] = [];
+    let hCur = ''; let hQuotes = false;
+    for (let i=0;i<headerLine.length;i++) {
+      const ch = headerLine[i];
+      if (ch === '"') { if (hQuotes && headerLine[i+1]==='"'){ hCur+='"'; i++; } else hQuotes=!hQuotes; }
+      else if (ch === ',' && !hQuotes) { headers.push(hCur.trim().replace(/^"|"$/g,'')); hCur=''; }
+      else hCur += ch;
+    }
+    headers.push(hCur.trim().replace(/^"|"$/g,''));
+
+    const mapKey = (k:string) => k.toLowerCase().replace(/[^a-z0-9]/g,'');
+    const headerMap: Record<string,string> = {};
+    headers.forEach(h=>{
+      const sk = mapKey(h);
+      if (/^name/.test(sk)) headerMap[h] = 'name';
+      else if (sk === 'email' || sk === 'mail' || sk === 'emailid') headerMap[h] = 'email';
+      else if (sk.startsWith('phone')||sk.includes('mobile')||sk==='contact'||sk==='number') headerMap[h] = 'phone';
+      else if (sk.startsWith('blood')) headerMap[h] = 'bloodGroup';
+      else if (sk.startsWith('roll')||sk.includes('enroll')||sk==='id'||sk==='studentid') headerMap[h] = 'rollNo';
+      else headerMap[h] = h; // keep original
+    });
+
+    const rows: any[] = [];
+    for (let li=1; li<lines.length; li++) {
+      const line = lines[li];
+      const cols: string[] = [];
+      let cur=''; let inQuotes=false;
+      for (let i=0;i<line.length;i++) {
+        const ch = line[i];
+        if (ch==='"') { if (inQuotes && line[i+1]==='"'){ cur+='"'; i++; } else inQuotes=!inQuotes; }
+        else if (ch===',' && !inQuotes) { cols.push(cur); cur=''; }
+        else cur+=ch;
+      }
+      cols.push(cur);
+      if (cols.every(c=>c.trim()==='')) continue; // skip blank row
+      const obj:any = {};
+      headers.forEach((h, idx) => {
+        obj[headerMap[h]] = (cols[idx]||'').trim();
+      });
+      rows.push(obj);
+    }
+    return rows;
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (!rows.length) throw new Error('No data rows found');
+      // Send to backend
+      const response = await axios.post('http://localhost:5000/admin/donors/import', { donors: rows }, { headers: { 'Content-Type': 'application/json' }});
+      setImportSummary(response.data);
+      await fetchDonors();
+    } catch (err: any) {
+      console.error('Import failed', err);
+      setImportSummary({ success: false, message: err.message || 'Import failed'});
+    } finally {
+      setImporting(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const downloadTemplate = () => {
+    const headers = 'name,email,phone,bloodGroup,rollNo';
+    const sample = 'John Doe,john@example.com,9876543210,A+,12345';
+    const csv = headers + '\n' + sample;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'donor_import_template.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
   return (
@@ -247,10 +364,15 @@ export function DonorManagement() {
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </button>
-          <button className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+          <button onClick={handleExport} className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
             <Download className="h-4 w-4" />
-            <span>Export</span>
+            <span>{donors.length ? 'Export' : 'Export (0)'}</span>
           </button>
+          <button onClick={triggerImport} disabled={importing} className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors">
+            <Upload className={`h-4 w-4 ${importing ? 'animate-pulse' : ''}`} />
+            <span>{importing ? 'Importing...' : 'Import CSV'}</span>
+          </button>
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileChange} className="hidden" />
         </div>
       </div>
 
@@ -281,6 +403,46 @@ export function DonorManagement() {
       {/* Content - Only show when not loading and no error */}
       {!loading && !error && (
         <>
+          {importSummary && (
+            <div className={`p-4 rounded-lg border text-sm ${importSummary.success ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-700 dark:text-green-300' : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-700 dark:text-red-300'}`}>
+              <div className="flex justify-between items-center">
+                <div>
+                  <strong>{importSummary.message || (importSummary.success ? 'Import complete' : 'Import failed')}</strong>
+                  {importSummary.inserted != null && (
+                    <span className="ml-2">Inserted: {importSummary.inserted} | Skipped: {importSummary.skipped} | Total: {importSummary.total}</span>
+                  )}
+                </div>
+                {importSummary.credentials && importSummary.credentials.length > 0 && (
+                  <button onClick={() => {
+                    const header = 'email,tempPassword';
+                    const rows = importSummary.credentials.map((c: any) => `${c.email},${c.tempPassword}`);
+                    const csv = header + '\n' + rows.join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'new_donor_credentials.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                  }} className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Download Passwords</button>
+                )}
+              </div>
+              {importSummary.results && importSummary.results.length > 0 && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer">Details ({importSummary.results.length})</summary>
+                  <div className="max-h-40 overflow-auto mt-2 space-y-1 text-xs">
+                    {importSummary.results.slice(0,200).map((r: any, idx: number) => (
+                      <div key={idx} className="flex justify-between">
+                        <span>Row {r.index}: {r.email || 'N/A'}</span>
+                        <span className={`ml-2 ${r.status === 'inserted' ? 'text-green-600' : r.status === 'skipped' ? 'text-yellow-600' : 'text-red-600'}`}>{r.status}{r.reason ? ` - ${r.reason}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              <div className="mt-2 flex space-x-2">
+                <button onClick={downloadTemplate} className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600">Template</button>
+                <button onClick={() => setImportSummary(null)} className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600">Dismiss</button>
+              </div>
+            </div>
+          )}
           {/* Statistics */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
@@ -357,18 +519,24 @@ export function DonorManagement() {
                 {selectedDonors.length} selected
               </span>
               <button
-                onClick={() => handleBulkAction('sms')}
-                className="flex items-center space-x-1 bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition-colors"
-              >
-                <MessageSquare className="h-3 w-3" />
-                <span>Send SMS</span>
-              </button>
-              <button
-                onClick={() => handleBulkAction('deactivate')}
+                onClick={async () => {
+                  if (!confirm(selectedDonors.length === donors.length ? 'Delete ALL donors? This cannot be undone.' : `Delete ${selectedDonors.length} selected donors?`)) return;
+                  try {
+                    if (selectedDonors.length === donors.length) {
+                      await axios.delete('http://localhost:5000/admin/donors', { data: { all: true } });
+                    } else {
+                      await axios.delete('http://localhost:5000/admin/donors', { data: { ids: selectedDonors } });
+                    }
+                    setSelectedDonors([]);
+                    await fetchDonors();
+                  } catch (err:any) {
+                    alert('Bulk delete failed: ' + (err.response?.data?.message || err.message));
+                  }
+                }}
                 className="flex items-center space-x-1 bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 transition-colors"
               >
-                <UserX className="h-3 w-3" />
-                <span>Deactivate</span>
+                <Trash2 className="h-3 w-3" />
+                <span>Delete{selectedDonors.length === donors.length ? ' All' : ''}</span>
               </button>
             </div>
           )}
