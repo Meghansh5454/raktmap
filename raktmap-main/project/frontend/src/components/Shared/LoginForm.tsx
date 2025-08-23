@@ -1,30 +1,25 @@
 import React, { useState } from "react";
 import { Heart, User, Lock } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import Loader from "./Loader";
 import { useAuth } from "../../contexts/AuthContext";
 
 const LoginForm: React.FC = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("admin");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
   const { login } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
     setLoading(true);
-    const success = await login(email, password, role);
+    const success = await login(email, password);
     if (success) {
       setLoading(false);
-      if (role === "admin") {
-        navigate("/admin-dashboard");
-      } else {
-        navigate("/hospital-dashboard");
-      }
+      // Navigation will be handled automatically based on detected role
+      // The App.tsx will redirect to appropriate dashboard
     } else {
       setLoading(false);
       setMessage("Login failed");
@@ -40,7 +35,7 @@ const LoginForm: React.FC = () => {
           <div className="flex items-center justify-center space-x-2 mb-4">
             <Heart className="h-10 w-10 text-red-600" />
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              BloodBank
+              RaktMap
             </h1>
           </div>
           <p className="text-gray-600 dark:text-gray-400">
@@ -49,21 +44,6 @@ const LoginForm: React.FC = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Role Selector */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Login as
-            </label>
-            <select
-              name="role"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            >
-              <option value="hospital">Hospital</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
           {/* Email Field */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">

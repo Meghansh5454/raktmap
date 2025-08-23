@@ -57,7 +57,7 @@ const MainLayout: React.FC = () => {
     } else {
       switch (activeSection) {
         case 'dashboard':
-          return <HospitalDashboard />;
+          return <HospitalDashboard onNavigate={setActiveSection} />;
         case 'request-blood':
           return <BloodRequestForm />;
         case 'donors':

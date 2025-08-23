@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Users, Filter, RefreshCw, Navigation, Maximize, X } from 'lucide-react';
+import { MapPin, Users, Filter, RefreshCw, Navigation, Maximize, X, CheckCircle } from 'lucide-react';
 import { CharusatMap } from '../Hospital/CharusatMap';
 import axios from 'axios';
 
@@ -38,9 +38,77 @@ export function LiveMap() {
   const [refreshing, setRefreshing] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [markingDonation, setMarkingDonation] = useState<string | null>(null); // Track which donor is being marked
+  const [completedDonations, setCompletedDonations] = useState<Set<string>>(new Set()); // Track completed donations by donorId only
 
   // Hospital location (Charusat University) - UPDATED TO CORRECT COORDINATES
   const hospitalLocation = { lat: 22.6013, lng: 72.8327 };
+
+  // Mark donation as completed
+  const markDonationCompleted = async (donor: DonorResponse) => {
+    try {
+      setMarkingDonation(donor._id);
+      
+      const requestData = {
+        donorId: donor.donorId,
+        requestId: selectedRequest,
+        donorName: donor.name,
+        donorPhone: donor.phone,
+        donorBloodGroup: donor.bloodGroup,
+        location: donor.location,
+        address: donor.address
+      };
+      
+      console.log('Sending donation completion request:', requestData);
+      
+      const response = await axios.post('http://localhost:5000/donation-history/mark-donation-completed', requestData);
+
+      console.log('Donation completion response:', response.data);
+
+      if (response.data.success) {
+        // Add this donor to completed donations (only donorId, not request-specific)
+        setCompletedDonations(prev => new Set([...prev, donor.donorId]));
+        
+        alert(`Donation completed successfully for ${donor.name}!`);
+        // Optionally refresh the data or update UI state
+      } else {
+        console.error('Server returned success: false', response.data);
+        alert('Failed to mark donation as completed. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('Error marking donation as completed:', error);
+      console.error('Error response:', error.response?.data);
+      alert(`Error marking donation as completed: ${error.response?.data?.message || error.message}`);
+    } finally {
+      setMarkingDonation(null);
+    }
+  };
+
+  // Check if a donor has already donated for ANY request
+  const isDonationCompleted = (donor: DonorResponse) => {
+    return completedDonations.has(donor.donorId);
+  };
+
+  // Fetch existing completed donations (all donors who have ever donated)
+  const fetchCompletedDonations = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/donation-history/donation-history');
+      if (response.data.success) {
+        // Get all donors who have completed ANY donation (regardless of request)
+        const completedDonorIds = response.data.donationHistory
+          .filter((donation: any) => 
+            donation.status === 'completed' || donation.status === 'accepted'
+          )
+          .map((donation: any) => donation.donorId as string);
+        
+        // Remove duplicates and create a Set
+        const uniqueDonorIds = [...new Set(completedDonorIds)];
+        setCompletedDonations(new Set(uniqueDonorIds));
+      }
+    } catch (error) {
+      console.error('Error fetching completed donations:', error);
+    }
+  };
 
   // Toggle fullscreen mode
   const toggleFullscreen = () => {
@@ -457,11 +525,17 @@ export function LiveMap() {
   useEffect(() => {
     if (selectedRequest) {
       fetchDonorResponses();
+      // Fetch completed donations for all donors
+      fetchCompletedDonations();
+      
       // Set up auto-refresh every 30 seconds
       const interval = setInterval(() => {
         fetchDonorResponses();
       }, 30000);
       return () => clearInterval(interval);
+    } else {
+      // Still fetch completed donations even for "all-locations"
+      fetchCompletedDonations();
     }
   }, [selectedRequest]);
 
@@ -518,17 +592,22 @@ export function LiveMap() {
   console.log('Status filter:', selectedStatus);
 
   const filteredDonors = donorsWithDistance.filter(donor => {
+    // Filter out donors who have already donated
+    if (isDonationCompleted(donor)) {
+      return false;
+    }
+    
     const withinRadius = donor.distance <= radiusFilter;
     const matchesStatus = selectedStatus === 'all' || donor.status === selectedStatus;
-    
-    // Add blood group compatibility check
     let isBloodGroupCompatible = true;
     if (selectedRequest && selectedRequest !== 'all-locations') {
       isBloodGroupCompatible = donor.isCompatible;
     }
-    
-    console.log(`Donor ${donor.name}: distance=${donor.distance.toFixed(2)}km, withinRadius=${withinRadius}, matchesStatus=${matchesStatus}, bloodGroupCompatible=${isBloodGroupCompatible}`);
-    
+    // If 'All Donors' or 'All User Locations' is selected, only show donors who have shared location
+    if (selectedRequest === 'all-locations' || selectedRequest === 'all-donors') {
+      const hasLocation = donor.lat !== 0 && donor.lng !== 0;
+      return withinRadius && matchesStatus && hasLocation;
+    }
     return withinRadius && matchesStatus && isBloodGroupCompatible;
   });
 
@@ -841,6 +920,26 @@ export function LiveMap() {
                       <div className="mt-2 text-xs text-gray-400">
                         Last seen: {new Date(donor.responseTime).toLocaleString()}
                       </div>
+                      
+                      {/* Show "Mark as Donated" button only when filtering by a specific request */}
+                      {selectedRequest && selectedRequest !== 'all-locations' && (
+                        <div className="mt-3 pt-2 border-t border-gray-100 dark:border-gray-600">
+                          <button
+                            onClick={() => markDonationCompleted(donor)}
+                            disabled={markingDonation === donor._id}
+                            className={`w-full text-xs px-3 py-2 rounded-lg font-medium transition-colors flex items-center justify-center space-x-1 ${
+                              markingDonation === donor._id
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : 'bg-green-600 text-white hover:bg-green-700'
+                            }`}
+                          >
+                            <CheckCircle className="h-3 w-3" />
+                            <span>
+                              {markingDonation === donor._id ? 'Marking...' : 'Mark as Donated'}
+                            </span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })

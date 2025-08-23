@@ -8,16 +8,7 @@ const donationHistorySchema = new mongoose.Schema({
   },
 
   
-  bloodRequestId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'BloodRequest',
-    required: true
-  },
-  hospitalId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Hospital',
-    required: true
-  },
+  // Removed bloodRequestId and hospitalId fields
   donorName: {
     type: String,
     required: true

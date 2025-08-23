@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import { Key, Palette, Sun, Moon, Bell, BellOff, MessageSquare } from 'lucide-react';
+import { Key, Palette, Bell, BellOff, MessageSquare } from 'lucide-react';
 
 const AdminSettings = () => {
   const [brightness, setBrightness] = useState('medium');
   const [notifications, setNotifications] = useState(true);
-  const [theme, setTheme] = useState('light');
 
   return (
     <div className="space-y-8">
@@ -55,7 +54,7 @@ const AdminSettings = () => {
                 Display Brightness
               </label>
               <div className="flex items-center space-x-4">
-                <Sun className="h-5 w-5 text-gray-400" />
+                {/* Removed Sun icon */}
                 <div className="flex-1">
                   <select
                     value={brightness}
@@ -67,7 +66,7 @@ const AdminSettings = () => {
                     <option value="high">High</option>
                   </select>
                 </div>
-                <Moon className="h-5 w-5 text-gray-400" />
+                {/* Removed Moon icon */}
               </div>
             </div>
             {/* Notifications Toggle */}
@@ -99,35 +98,7 @@ const AdminSettings = () => {
               </div>
             </div>
             {/* Theme Selection */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Theme Preference
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setTheme('light')}
-                  className={`p-3 rounded-xl border-2 transition-all duration-200 ${
-                    theme === 'light'
-                      ? 'border-red-500 bg-red-50'
-                      : 'border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  <Sun className="h-5 w-5 mx-auto mb-1 text-yellow-500" />
-                  <span className="text-sm font-medium">Light</span>
-                </button>
-                <button
-                  onClick={() => setTheme('dark')}
-                  className={`p-3 rounded-xl border-2 transition-all duration-200 ${
-                    theme === 'dark'
-                      ? 'border-red-500 bg-red-50'
-                      : 'border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  <Moon className="h-5 w-5 mx-auto mb-1 text-blue-500" />
-                  <span className="text-sm font-medium">Dark</span>
-                </button>
-              </div>
-            </div>
+            {/* Theme Preference selection removed as requested */}
           </div>
         </div>
         {/* Advanced Notification Settings */}

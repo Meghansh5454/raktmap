@@ -40,13 +40,13 @@ export function Table<T extends Record<string, any>>({
       )}
       
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="w-full min-w-full">
           <thead className="bg-gray-50 dark:bg-gray-700">
             <tr>
               {columns.map((column) => (
                 <th
                   key={String(column.key)}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
                 >
                   {column.label}
                 </th>
@@ -59,7 +59,7 @@ export function Table<T extends Record<string, any>>({
                 {columns.map((column) => (
                   <td
                     key={String(column.key)}
-                    className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white"
+                    className="px-4 py-4 text-sm text-gray-900 dark:text-white"
                   >
                     {column.render ? column.render(item[column.key], item) : item[column.key]}
                   </td>

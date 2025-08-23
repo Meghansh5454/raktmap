@@ -422,34 +422,29 @@ app.get('/donation-history', async (req, res) => {
 app.post('/register', async (req, res) => {
   try {
     console.log("Received /register request", req.body);
-    let { email, password, role, name } = req.body;
+    let { email, password, name } = req.body;
 
-    if (!email || !password || !role || !name) {
+    if (!email || !password || !name) {
       return res.status(400).json({ message: 'All fields required' });
     }
 
     email = email.toLowerCase();
-    role = role.toLowerCase();
+    // Automatically assign hospital role for all registrations
+    const role = 'hospital';
 
-    let Model;
-    if (role === 'hospital') {
-      Model = Hospital;
-    } else if (role === 'admin') {
-      Model = Admin;
-    } else {
-      return res.status(400).json({ message: 'Invalid role' });
-    }
-
-    const existing = await Model.findOne({ email });
-    if (existing) {
+    // Check if user already exists in either Admin or Hospital collection
+    const existingHospital = await Hospital.findOne({ email });
+    const existingAdmin = await Admin.findOne({ email });
+    
+    if (existingHospital || existingAdmin) {
       return res.status(409).json({ message: 'User already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new Model({ email, password: hashedPassword, name });
+    const user = new Hospital({ email, password: hashedPassword, name });
     await user.save();
 
-    res.status(201).json({ message: `${role.charAt(0).toUpperCase() + role.slice(1)} registered successfully` });
+    res.status(201).json({ message: 'Hospital registered successfully' });
   } catch (err) {
     console.error("Registration error:", err);
     res.status(500).json({ message: "Registration failed. Please try again." });
@@ -461,24 +456,26 @@ app.post('/register', async (req, res) => {
 ============================ */
 app.post('/login', async (req, res) => {
   try {
-    let { email, password, role } = req.body;
+    let { email, password } = req.body;
     email = email.toLowerCase();
-    role = role.toLowerCase();
 
-    let Model;
-    if (role === 'hospital') {
-      Model = Hospital;
-    } else if (role === 'admin') {
-      Model = Admin;
-    } else {
-      return res.status(400).json({ message: 'Invalid role' });
+    // Check both Admin and Hospital collections to determine role automatically
+    let user = await Admin.findOne({ email });
+    let role = 'admin';
+    
+    if (!user) {
+      user = await Hospital.findOne({ email });
+      role = 'hospital';
     }
 
-    const user = await Model.findOne({ email });
-    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
 
     const token = jwt.sign(
       { id: user._id, email: user.email, role: role, name: user.name },
@@ -639,9 +636,37 @@ app.get('/hospital/dashboard/recent-requests', authenticateToken, async (req, re
   }
 });
 
-/* ============================
-   8. Example Protected Route
-============================ */
+// Admin: Add hospital (for admin panel)
+app.post('/admin/hospitals', async (req, res) => {
+  try {
+    const { name, email, phone, emergencyContact, address, radius, status } = req.body;
+    if (!name || !email) {
+      return res.status(400).json({ success: false, message: 'Hospital name and email required' });
+    }
+    const existing = await Hospital.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'Hospital already exists' });
+    }
+    const hospital = new Hospital({
+      name,
+      email: email.toLowerCase(),
+      phone,
+      emergencyContact,
+      address,
+      radius,
+      status: status || 'Pending'
+    });
+    await hospital.save();
+    res.json({ success: true, message: 'Hospital added', hospital });
+  } catch (error) {
+    console.error('Error adding hospital:', error);
+    res.status(500).json({ success: false, message: 'Failed to add hospital', error: error.message });
+  }
+});
+
+// ============================
+// Example Protected Route
+// ============================
 app.get('/dashboard', authenticateToken, (req, res) => {
   res.json({ message: `Welcome, ${req.user.email}!`, role: req.user.role });
 });

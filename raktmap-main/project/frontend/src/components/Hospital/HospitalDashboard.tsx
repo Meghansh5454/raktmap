@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Heart, Users, CheckCircle, Clock, MapPin, Phone, RefreshCw } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Heart, Users, CheckCircle, MapPin, Phone, RefreshCw } from 'lucide-react';
 import { StatsCard } from '../Shared/StatsCard';
 import { DonorsList } from './DonorsList';
 import axios from 'axios';
@@ -8,7 +8,6 @@ interface DashboardStats {
   activeRequests: number;
   availableDonors: number;
   completedThisMonth: number;
-  averageResponseTime: string;
 }
 
 interface BloodRequest {
@@ -29,13 +28,12 @@ interface RespondingDonor {
   status: string;
 }
 
-export function HospitalDashboard() {
+export function HospitalDashboard({ onNavigate }: { onNavigate?: (section: string) => void }) {
   const [isDonorsListOpen, setIsDonorsListOpen] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({
     activeRequests: 0,
     availableDonors: 0,
-    completedThisMonth: 0,
-    averageResponseTime: '0 min'
+    completedThisMonth: 0
   });
   const [recentRequests, setRecentRequests] = useState<BloodRequest[]>([]);
   const [respondingDonors, setRespondingDonors] = useState<RespondingDonor[]>([]);
@@ -56,16 +54,35 @@ export function HospitalDashboard() {
         headers: { Authorization: `Bearer ${token}` }
       };
 
-      // Fetch dashboard stats
-      const statsResponse = await axios.get('http://localhost:5000/hospital/dashboard/stats', config);
-      if (statsResponse.data.success) {
-        setStats(statsResponse.data.stats);
-      }
+      // Fetch recent blood requests from blood-requests endpoint
+      try {
+        const requestsResponse = await axios.get('http://localhost:5000/blood-requests/hospital', config);
+        if (requestsResponse.data.success) {
+          // Get recent requests (last 5)
+          const allRequests = requestsResponse.data.bloodRequests || [];
+          const recentRequests = allRequests.slice(0, 5).map((request: any) => ({
+            _id: request._id,
+            bloodGroup: request.bloodGroup,
+            units: request.quantity || 1,
+            urgency: request.urgency,
+            status: request.status,
+            createdAt: request.createdAt
+          }));
+          setRecentRequests(recentRequests);
 
-      // Fetch recent requests
-      const requestsResponse = await axios.get('http://localhost:5000/hospital/dashboard/recent-requests', config);
-      if (requestsResponse.data.success) {
-        setRecentRequests(requestsResponse.data.requests);
+          // Calculate stats from the requests
+          const activeCount = allRequests.filter((req: any) => req.status === 'pending').length;
+          const completedCount = allRequests.filter((req: any) => req.status === 'fulfilled').length;
+          
+          setStats(prevStats => ({
+            ...prevStats,
+            activeRequests: activeCount,
+            completedThisMonth: completedCount
+          }));
+        }
+      } catch (reqErr) {
+        console.log('Failed to fetch blood requests:', reqErr);
+        setRecentRequests([]);
       }
 
       // Fetch responding donors
@@ -82,6 +99,12 @@ export function HospitalDashboard() {
             status: donor.status || 'responded'
           }));
           setRespondingDonors(formattedDonors);
+          
+          // Update available donors count
+          setStats(prevStats => ({
+            ...prevStats,
+            availableDonors: responses.length
+          }));
         }
       } catch (donorErr) {
         console.log('Failed to fetch responding donors, using fallback data');
@@ -100,8 +123,7 @@ export function HospitalDashboard() {
       setStats({
         activeRequests: 3,
         availableDonors: 15,
-        completedThisMonth: 8,
-        averageResponseTime: '12 min'
+        completedThisMonth: 8
       });
       
       setRecentRequests([
@@ -188,7 +210,7 @@ export function HospitalDashboard() {
       {/* Dashboard Content */}
       {!loading && !error && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <StatsCard
               title="Active Requests"
               value={stats.activeRequests}
@@ -207,13 +229,6 @@ export function HospitalDashboard() {
               icon={CheckCircle}
               trend={{ value: 20, isPositive: true }}
               color="green"
-            />
-            <StatsCard
-              title="Response Time"
-              value={stats.averageResponseTime}
-              icon={Clock}
-              trend={{ value: 8, isPositive: true }}
-              color="yellow"
             />
           </div>
 
@@ -240,8 +255,8 @@ export function HospitalDashboard() {
                         <div className="flex items-center space-x-2">
                           <span className="font-medium text-gray-900 dark:text-white">{request.bloodGroup}</span>
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${getUrgencyColor(request.urgency)}`}>
-                            {request.urgency}
-                          </span>
+                                {request.urgency}
+                              </span>
                         </div>
                         <p className="text-sm text-gray-600 dark:text-gray-400">
                           {request.units} units • {new Date(request.createdAt).toLocaleDateString()}
@@ -295,7 +310,10 @@ export function HospitalDashboard() {
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <button className="p-4 border-2 border-dashed border-red-300 dark:border-red-700 rounded-lg text-center hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+              <button 
+                onClick={() => onNavigate && onNavigate('request-blood')}
+                className="p-4 border-2 border-dashed border-red-300 dark:border-red-700 rounded-lg text-center hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+              >
                 <Heart className="h-8 w-8 text-red-600 mx-auto mb-2" />
                 <p className="text-sm font-medium text-gray-900 dark:text-white">Emergency Request</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Send urgent blood request</p>
@@ -308,7 +326,10 @@ export function HospitalDashboard() {
                 <p className="text-sm font-medium text-gray-900 dark:text-white">View Donors</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Browse available donors</p>
               </button>
-              <button className="p-4 border-2 border-dashed border-green-300 dark:border-green-700 rounded-lg text-center hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors">
+              <button 
+                onClick={() => onNavigate && onNavigate('map')}
+                className="p-4 border-2 border-dashed border-green-300 dark:border-green-700 rounded-lg text-center hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+              >
                 <MapPin className="h-8 w-8 text-green-600 mx-auto mb-2" />
                 <p className="text-sm font-medium text-gray-900 dark:text-white">Live Map</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Track donor locations</p>

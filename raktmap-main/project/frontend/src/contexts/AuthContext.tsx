@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import axios, { AxiosError } from "axios";
+import axios from "axios";
 
 // Update this URL to match your backend server
 axios.defaults.baseURL = "http://localhost:5000"; // Backend is running on port 5000
@@ -41,7 +41,7 @@ interface AuthContextType {
     role: string;
     location?: string;
   } | null;
-  login: (email: string, password: string, role: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
   loading: boolean;
@@ -138,16 +138,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (
     email: string,
-    password: string,
-    role: string
+    password: string
   ): Promise<boolean> => {
     try {
       // Clear any existing auth data before login attempt
       localStorage.removeItem("token");
       delete axios.defaults.headers.common["Authorization"];
 
-      console.log("Attempting login with:", { email, role });
-      const response = await axios.post("/login", { email, password, role });
+      console.log("Attempting login with:", { email });
+      const response = await axios.post("/login", { email, password });
       console.log("Login response:", response.data); // Debug log
 
       const { token, role: responseRole, name } = response.data;

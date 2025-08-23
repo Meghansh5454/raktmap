@@ -1,8 +1,6 @@
-import React from 'react';
 import { 
   Home, Users, Building2, Heart, Settings, Bell, 
-  Map, BarChart3, History, Shield, FileText, 
-  UserCheck, Search, Download, Calendar
+  Map, BarChart3, History, Shield, FileText, Search
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -46,7 +44,7 @@ export function Sidebar({ activeSection, setActiveSection }: SidebarProps) {
         <div className="flex items-center space-x-2">
           <Heart className="h-8 w-8 text-red-600" />
           <div>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">BloodBank</h1>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">RaktMap</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 capitalize">{user?.role} Panel</p>
           </div>
         </div>

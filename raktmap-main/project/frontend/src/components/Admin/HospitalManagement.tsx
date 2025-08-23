@@ -90,7 +90,7 @@ export function HospitalManagement() {
     e.preventDefault();
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.post('http://localhost:5000/hospitals', formData, {
+  const response = await axios.post('http://localhost:5000/admin/hospitals', formData, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (response.data.success) {

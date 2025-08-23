@@ -1,12 +1,10 @@
 import 'leaflet/dist/leaflet.css';
-import React, { useEffect } from "react";
+import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import LoginForm from "./components/Shared/LoginForm";
 import RegisterForm from "./components/Shared/RegisterForm";
-import { AdminDashboard } from "./components/Admin/AdminDashboard";
-import { HospitalDashboard } from "./components/Hospital/HospitalDashboard";
 import MainLayout from "./components/Layout/MainLayout";
 import Loader from "./components/Shared/Loader";
 import { useAuth } from "./contexts/AuthContext";
@@ -89,7 +87,23 @@ const App: React.FC = () => {
         {/* Public route for donors to respond to SMS tokens */}
         <Route path="/r/:token" element={<DonorTokenResponse />} />
 
-        <Route path="/login" element={<LoginForm />} />
+        <Route 
+          path="/login" 
+          element={
+            user ? (
+              <Navigate
+                to={
+                  user.role === "admin"
+                    ? "/admin-dashboard"
+                    : "/hospital-dashboard"
+                }
+                replace
+              />
+            ) : (
+              <LoginForm />
+            )
+          } 
+        />
         <Route
           path="/register"
           element={

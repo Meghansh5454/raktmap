@@ -9,7 +9,6 @@ const RegisterForm: React.FC = () => {
     name: "",
     email: "",
     password: "",
-    role: "hospital",
   });
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,11 +51,10 @@ const RegisterForm: React.FC = () => {
 
       if (res.ok) {
         try {
-          await login(form.email, form.password, form.role);
+          await login(form.email, form.password);
           setLoading(false);
-          navigate(
-            form.role === "admin" ? "/admin-dashboard" : "/hospital-dashboard"
-          );
+          // Role will be determined automatically by the backend
+          // Navigation will be handled by the login function based on detected role
         } catch (loginError) {
           setLoading(false);
           setMessage("Registration successful! Please login.");
@@ -142,21 +140,6 @@ const RegisterForm: React.FC = () => {
                 required
               />
             </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Role
-            </label>
-            <select
-              name="role"
-              value={form.role}
-              onChange={handleChange}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            >
-              <option value="hospital">Hospital</option>
-              <option value="admin">Admin</option>
-            </select>
           </div>
 
           {message && (
