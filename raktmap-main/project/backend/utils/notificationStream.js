@@ -1,4 +1,3 @@
-// Simple in-memory Server-Sent Events (SSE) broadcaster per hospital
 const clients = new Map(); // hospitalId -> Set(res)
 
 function addClient(hospitalId, res) {

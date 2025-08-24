@@ -1,11 +1,33 @@
 const express = require('express');
 const router = express.Router();
 const BloodRequest = require('../models/BloodRequest');
-const Donor = require('../models/Donor'); // Ensure this line is present
+const Donor = require('../models/Donor');
 const ResponseToken = require('../models/ResponseToken');
 const { sendSMS } = require('../services/smsService');
 const Notification = require('../models/Notification');
 const { broadcastNotification } = require('../utils/notificationStream');
+
+// Blood compatibility chart - who can receive from whom
+const bloodCompatibilityChart = {
+    'O-': ['O-'],
+    'O+': ['O-', 'O+'],
+    'A-': ['O-', 'A-'],
+    'A+': ['O-', 'O+', 'A-', 'A+'],
+    'B-': ['O-', 'B-'],
+    'B+': ['O-', 'O+', 'B-', 'B+'],
+    'AB-': ['O-', 'A-', 'B-', 'AB-'],
+    'AB+': ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+']
+};
+
+// Function to check blood compatibility
+function isBloodCompatible(recipientBloodGroup, donorBloodGroup) {
+    // Normalize blood groups by removing spaces and converting to uppercase
+    const normalizedRecipient = recipientBloodGroup.replace(/\s+/g, '').toUpperCase();
+    const normalizedDonor = donorBloodGroup.replace(/\s+/g, '').toUpperCase();
+    
+    // Check if donor's blood group is in the list of compatible groups for the recipient
+    return bloodCompatibilityChart[normalizedRecipient]?.includes(normalizedDonor) || false;
+}
 
 // Create a new blood request
 router.post('/', async (req, res) => {
@@ -15,7 +37,7 @@ router.post('/', async (req, res) => {
 
     // Create and save the blood request
     const bloodRequest = new BloodRequest({
-      hospitalId: hospital.id, // 2. USE hospital.id INSTEAD OF hospital._id
+      hospitalId: hospital.id,
       bloodGroup,
       quantity,
       urgency,
@@ -39,106 +61,97 @@ router.post('/', async (req, res) => {
       broadcastNotification(doc);
     } catch (e) { console.error('Failed to create notification:', e.message); }
 
-    // Debug: Log normalized blood group
-    const normalizedBloodGroup = bloodGroup.replace(/\s+/g, '').toUpperCase();
-    console.log('Normalized requested blood group:', normalizedBloodGroup);
-
-    // Fetch all donors and filter in JS for normalized blood group match
+    // Find compatible donors
     const allDonors = await Donor.find({});
-    allDonors.forEach(donor => {
-      const donorBloodGroup = donor["Blood Group"] || donor.bloodGroup;
-      if (!donorBloodGroup) {
-        console.warn(`Donor missing Blood Group:`, donor);
-        return;
-      }
-      const donorNormalized = donorBloodGroup.replace(/\s+/g, '').toUpperCase();
-      const donorName = donor["Student Name"] || donor.name || '[no name]';
-      console.log(`Donor: ${donorName}, Raw: "${donorBloodGroup}", Normalized: "${donorNormalized}"`);
+    const compatibleDonors = allDonors.filter(donor => {
+      const donorBloodGroup = donor.bloodGroup || donor["Blood Group"];
+      return donorBloodGroup && isBloodCompatible(bloodGroup, donorBloodGroup);
     });
 
-    const matchingDonors = allDonors.filter(donor => {
-      const donorBloodGroup = donor["Blood Group"] || donor.bloodGroup;
-      if (!donorBloodGroup) return false;
-      const donorNormalized = donorBloodGroup.replace(/\s+/g, '').toUpperCase();
-      return donorNormalized === normalizedBloodGroup;
-    });
-
-    console.log(`Found ${matchingDonors.length} matching donors for blood group ${bloodGroup}`);
-
-    // Prepare SMS message with token-based tracking
     let smsSuccessCount = 0;
-    for (const donor of matchingDonors) {
-      const donorName = donor["Student Name"] || donor.name || '[no name]';
-      const donorPhone = donor["Mobile No"] || donor.phone;
-      if (donorPhone) {
+
+    // Send SMS to compatible donors
+    for (const donor of compatibleDonors) {
+      const donorPhone = donor.phoneNumber || donor["Mobile No"] || donor.phone;
+      const donorName = donor["Student Name"] || donor.name || donor._id;
+
+      if (!donorPhone) {
+        console.warn(`No phone number for donor: ${donorName}`);
+        continue;
+      }
+
+      try {
+        // Generate tracking token
+        const responseToken = Math.random().toString(36).substr(2, 8);
+
+        // Store token mapping
+        await ResponseToken.create({
+          token: responseToken,
+          requestId: bloodRequest._id,
+          donorId: donor._id
+        });
+
+        // Create SMS message with tracking link
+        const message = `Urgent: ${quantity} units ${bloodGroup} needed at ${hospital.name}. ` +
+          `Urgency: ${urgency}. ` +
+          `Respond: https://donor-location-tracker.onrender.com/r/${responseToken}`;
+        
+        await sendSMS(donorPhone, message);
+        smsSuccessCount++;
+        
+        console.log(`SMS sent to donor ${donorName} (${donorPhone})`);
+
+        // Create success notification
+        const notif = await Notification.create({
+          hospitalId: hospital.id,
+          type: 'info',
+          title: 'SMS Sent',
+          message: `SMS sent to ${donorName} (${bloodGroup})`,
+          read: false,
+          meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
+        });
+        broadcastNotification(notif);
+      } catch (error) {
+        console.error(`Failed to send SMS to donor ${donorName}:`, error.message);
+        
+        // Create error notification
         try {
-          // Generate short token for tracking
-          const responseToken = Math.random().toString(36).substr(2, 8);
-          
-          // Store token mapping in database for tracking
-          await ResponseToken.create({
-            token: responseToken,
-            requestId: bloodRequest._id,
-            donorId: donor._id || donor["Student Name"] || donorPhone // Use available ID
+          const notif = await Notification.create({
+            hospitalId: hospital.id,
+            type: 'error',
+            title: 'SMS Failed',
+            message: `Failed to send SMS to ${donorName}`,
+            read: false,
+            meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
           });
-          
-          // Create improved SMS message
-          const message = `Urgent: ${quantity} units ${bloodGroup} needed at ${hospital.name}. Respond: https://donor-location-tracker.onrender.com/r/${responseToken}`;
-          
-          await sendSMS(donorPhone, message);
-          smsSuccessCount++;
-          console.log(`SMS sent successfully to donor: ${donorName} (${donorPhone})`);
-          try {
-            const notif = await Notification.create({
-              hospitalId: hospital.id,
-              type: 'info',
-              title: 'SMS Sent',
-              message: `SMS sent to ${donorName} (${bloodGroup})`,
-              read: false,
-              meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
-            });
-            broadcastNotification(notif);
-          } catch (e) { console.error('Broadcast SMS sent notification failed', e); }
-        } catch (error) {
-          console.error(`Failed to send SMS to donor ${donorName}:`, error);
-          try {
-            const notif = await Notification.create({
-              hospitalId: hospital.id,
-              type: 'error',
-              title: 'SMS Failed',
-              message: `Failed to send SMS to ${donorName}`,
-              read: false,
-              meta: { donorId: donor._id, bloodRequestId: bloodRequest._id }
-            });
-            broadcastNotification(notif);
-          } catch (_) {}
-        }
+          broadcastNotification(notif);
+        } catch (e) { console.error('Failed to create error notification:', e.message); }
       }
     }
 
-    // Summary notification (ephemeral) after loop
+    // Create summary notification
     try {
       const notif = await Notification.create({
         hospitalId: hospital.id,
         type: 'success',
         title: 'SMS Dispatch Complete',
-        message: `${smsSuccessCount}/${matchingDonors.length} SMS delivered for ${bloodGroup}`,
+        message: `${smsSuccessCount}/${compatibleDonors.length} SMS delivered for ${bloodGroup}`,
         read: false,
         meta: { bloodRequestId: bloodRequest._id }
       });
       broadcastNotification(notif);
-    } catch (e) { console.error('Broadcast SMS summary failed', e); }
+    } catch (e) { console.error('Failed to create summary notification:', e.message); }
 
-    // Send response with SMS status
+    // Send response
     res.status(201).json({
       success: true,
       message: 'Blood request created successfully',
+      bloodRequest,
       smsStatus: {
-        totalDonors: matchingDonors.length,
+        totalDonors: compatibleDonors.length,
         smsDelivered: smsSuccessCount,
-        bloodGroup: bloodGroup
-  },
-  bloodRequestId: bloodRequest._id
+        bloodGroup
+      }
     });
 
   } catch (error) {
