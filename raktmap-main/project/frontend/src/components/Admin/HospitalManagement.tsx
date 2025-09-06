@@ -3,7 +3,7 @@ import { Plus, Edit, Eye, Trash2, CheckCircle, XCircle, Clock, RefreshCw } from 
 import { Table } from '../Shared/Table';
 import { Modal } from '../Shared/Modal';
 import { Hospital } from '../../types';
-import axios from 'axios';
+import axios from '../../utils/axios';
 
 export function HospitalManagement() {
   const [searchValue, setSearchValue] = useState('');
@@ -29,7 +29,7 @@ export function HospitalManagement() {
       setLoading(true);
       setError(null);
       console.log('Fetching hospitals from database...');
-      const response = await axios.get('http://localhost:5000/admin/hospitals');
+      const response = await axios.get('/admin/hospitals');
       if (response.data.success) {
         setHospitals(response.data.hospitals);
         console.log('Fetched hospitals:', response.data.hospitals.length);
@@ -89,10 +89,8 @@ export function HospitalManagement() {
   const handleCreateHospital = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('token');
-  const response = await axios.post('http://localhost:5000/admin/hospitals', formData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      setError(null); // Clear any previous errors
+      const response = await axios.post('/admin/hospitals', formData);
       if (response.data.success) {
         await fetchHospitals();
         setIsModalOpen(false);
@@ -110,10 +108,9 @@ export function HospitalManagement() {
     if (!selectedHospital) return;
     
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.put(`http://localhost:5000/hospitals/${selectedHospital._id}`, formData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      setError(null); // Clear any previous errors
+      const hospitalId = selectedHospital._id || selectedHospital.id;
+      const response = await axios.put(`/admin/hospitals/${hospitalId}`, formData);
       if (response.data.success) {
         await fetchHospitals();
         setIsModalOpen(false);
@@ -130,10 +127,8 @@ export function HospitalManagement() {
     if (!confirm('Are you sure you want to delete this hospital?')) return;
     
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.delete(`http://localhost:5000/hospitals/${hospitalId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      setError(null); // Clear any previous errors
+      const response = await axios.delete(`/admin/hospitals/${hospitalId}`);
       if (response.data.success) {
         await fetchHospitals();
       }
@@ -268,13 +263,16 @@ export function HospitalManagement() {
 
       {/* Error State */}
       {error && !loading && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
           <div className="flex items-center">
             <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 mr-2" />
-            <span className="text-red-700 dark:text-red-300">Error loading hospitals: {error}</span>
+            <span className="text-red-700 dark:text-red-300">Error: {error}</span>
           </div>
           <button
-            onClick={fetchHospitals}
+            onClick={() => {
+              setError(null);
+              fetchHospitals();
+            }}
             className="mt-2 bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
           >
             Retry
@@ -283,7 +281,7 @@ export function HospitalManagement() {
       )}
 
       {/* Data Table */}
-      {!loading && !error && (
+      {!loading && hospitals.length > 0 && (
         <Table
           data={filteredHospitals}
           columns={columns}

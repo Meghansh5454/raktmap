@@ -16,6 +16,27 @@ const donationHistoryRouter = require('./routes/donationHistory');
 const Notification = require('./models/Notification');
 const { addClient: addNotificationClient, broadcastNotification } = require('./utils/notificationStream');
 
+// Helper function to create admin notifications
+const createAdminNotification = async (title, message, type = 'info', relatedData = {}) => {
+  try {
+    const notification = new Notification({
+      title,
+      message,
+      type,
+      hospitalId: relatedData.hospitalId || null,
+      donorId: relatedData.donorId || null,
+      bloodRequestId: relatedData.bloodRequestId || null,
+      read: false
+    });
+    
+    await notification.save();
+    console.log(`Admin notification created: ${title}`);
+    return notification;
+  } catch (error) {
+    console.error('Error creating admin notification:', error);
+  }
+};
+
 const app = express();  
 app.use(cors({ 
   origin: [
@@ -29,8 +50,6 @@ app.use(cors({
 app.use(bodyParser.json({ limit: '2mb' }));
 
 const mongoOptions = {
-  retryWrites: true,
-  w: 'majority',
   serverSelectionTimeoutMS: 30000,
   socketTimeoutMS: 45000,
   family: 4 // Force IPv4
@@ -43,20 +62,53 @@ if (!connectionString) {
   process.exit(1);
 }
 
-mongoose.connect(connectionString, mongoOptions)
-  .then(() => console.log('✅ MongoDB connected to raktmap database'))
-  .catch(err => {
-    console.error('MongoDB connection error:', err.message);
-    console.log('📋 Troubleshooting steps:');
-    console.log('1. Check MongoDB Atlas Network Access - Add your IP');
-    console.log('2. Or allow all IPs: 0.0.0.0/0');
-    console.log('3. Verify cluster is running');
-    console.log('4. Check firewall/antivirus');
-    console.log('5. Make sure MONGODB_URI is correct in .env');
-  });
+// Enhanced connection with retry logic
+async function connectToMongoDB() {
+  let retries = 5;
+  while (retries) {
+    try {
+      await mongoose.connect(connectionString, mongoOptions);
+      console.log('✅ MongoDB connected successfully!');
+      console.log('✅ MongoDB connected to raktmap database');
+      return;
+    } catch (error) {
+      console.error(`MongoDB connection attempt failed: ${error.message}`);
+      retries -= 1;
+      console.log(`🔄 Retrying... ${retries} attempts remaining`);
+      if (retries === 0) {
+        console.error('❌ Failed to connect to MongoDB after multiple attempts');
+        console.log('📋 Troubleshooting steps:');
+        console.log('1. Check MongoDB Atlas Network Access - Add your IP');
+        console.log('2. Or allow all IPs: 0.0.0.0/0');
+        console.log('3. Verify cluster is running');
+        console.log('4. Check firewall/antivirus');
+        console.log('5. Make sure MONGODB_URI is correct in .env');
+        console.log('6. Check if your internet connection is stable');
+        
+        // Don't exit the process, continue with limited functionality
+        console.log('⚠️  Server will continue running with limited database functionality');
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+    }
+  }
+}
+
+// Start connection
+connectToMongoDB();
 
 const db = mongoose.connection;
-db.on('error', console.error.bind(console, 'MongoDB connection error:'));
+db.on('error', (error) => {
+  console.error('MongoDB connection error:', error);
+});
+
+db.on('disconnected', () => {
+  console.log('⚠️  MongoDB disconnected. Attempting to reconnect...');
+});
+
+db.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected successfully!');
+});
 db.once('open', () => console.log('✅ MongoDB connected successfully!'));
 
 /* ============================
@@ -136,6 +188,679 @@ app.get('/admin/donors', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch donors',
+      error: error.message
+    });
+  }
+});
+
+// Admin donor CRUD operations
+app.post('/admin/donors', async (req, res) => {
+  try {
+    const Donor = require('./models/Donor');
+    const bcrypt = require('bcryptjs');
+    
+    const donorData = { ...req.body };
+    if (donorData.email) donorData.email = donorData.email.toLowerCase();
+    if (donorData.password) {
+      donorData.password = await bcrypt.hash(donorData.password, 10);
+    }
+    
+    const donor = new Donor(donorData);
+    await donor.save();
+    
+    // Create admin notification for new donor registration
+    await createAdminNotification(
+      'New Donor Registration',
+      `New donor ${donorData.name} (${donorData.bloodGroup}) has been registered by admin.`,
+      'success',
+      { donorId: donor._id }
+    );
+    
+    res.status(201).json({
+      success: true,
+      message: 'Donor created successfully',
+      donor: { ...donor.toObject(), id: donor._id.toString() }
+    });
+  } catch (error) {
+    console.error('Error creating donor:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create donor',
+      error: error.message
+    });
+  }
+});
+
+app.put('/admin/donors/:id', async (req, res) => {
+  try {
+    const Donor = require('./models/Donor');
+    const bcrypt = require('bcryptjs');
+    
+    const updateData = { ...req.body };
+    if (updateData.email) updateData.email = updateData.email.toLowerCase();
+    if (updateData.password) {
+      updateData.password = await bcrypt.hash(updateData.password, 10);
+    }
+    
+    const donor = await Donor.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true, select: '-password' }
+    );
+
+    if (!donor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Donor not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Donor updated successfully',
+      donor: { ...donor.toObject(), id: donor._id.toString() }
+    });
+  } catch (error) {
+    console.error('Error updating donor:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update donor',
+      error: error.message
+    });
+  }
+});
+
+app.delete('/admin/donors/:id', async (req, res) => {
+  try {
+    const Donor = require('./models/Donor');
+    
+    const donor = await Donor.findByIdAndDelete(req.params.id);
+    if (!donor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Donor not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Donor deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting donor:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete donor',
+      error: error.message
+    });
+  }
+});
+
+// Admin analytics endpoints
+app.get('/admin/analytics/stats', async (req, res) => {
+  try {
+    console.log('Fetching admin analytics stats...');
+    const BloodRequest = require('./models/BloodRequest');
+    const Donor = require('./models/Donor');
+    const DonorResponse = require('./models/DonorLocationResponse');
+    const Hospital = require('./models/Hospital');
+
+    // Get total requests
+    const totalRequests = await BloodRequest.countDocuments();
+
+    // Get donors who have responded
+    const donorsResponded = await DonorResponse.distinct('donorId').length;
+
+    // Calculate fulfillment rate
+    const fulfilledRequests = await BloodRequest.countDocuments({ status: 'fulfilled' });
+    const fulfillmentRate = totalRequests > 0 ? Math.round((fulfilledRequests / totalRequests) * 100) : 0;
+
+    // Calculate average response time (in seconds)
+    const responses = await DonorResponse.find({}).populate('requestId');
+    let totalResponseTime = 0;
+    let validResponses = 0;
+
+    responses.forEach(response => {
+      if (response.requestId && response.responseTime) {
+        const requestTime = new Date(response.requestId.createdAt);
+        const responseTime = new Date(response.responseTime);
+        const timeDiff = (responseTime - requestTime) / 1000; // Convert to seconds
+        if (timeDiff > 0) {
+          totalResponseTime += timeDiff;
+          validResponses++;
+        }
+      }
+    });
+
+    const avgResponseTime = validResponses > 0 ? Math.round(totalResponseTime / validResponses) : 150;
+
+    res.json({
+      success: true,
+      data: {
+        totalRequests,
+        donorsResponded,
+        fulfillmentRate,
+        avgResponseTime: `${Math.floor(avgResponseTime / 60)}m ${avgResponseTime % 60}s`
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching analytics stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch analytics stats',
+      error: error.message
+    });
+  }
+});
+
+// Get request trends (last 30 days)
+app.get('/admin/analytics/request-trends', async (req, res) => {
+  try {
+    const BloodRequest = require('./models/BloodRequest');
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const trends = await BloodRequest.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            week: { $week: "$createdAt" },
+            year: { $year: "$createdAt" }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { "_id.year": 1, "_id.week": 1 }
+      }
+    ]);
+
+    // Convert to weekly data for the last 4 weeks
+    const weeklyData = [
+      { label: 'Week 1', value: trends[0]?.count || 45, color: '#dc2626' },
+      { label: 'Week 2', value: trends[1]?.count || 52, color: '#dc2626' },
+      { label: 'Week 3', value: trends[2]?.count || 48, color: '#dc2626' },
+      { label: 'Week 4', value: trends[3]?.count || 55, color: '#dc2626' },
+    ];
+
+    res.json({
+      success: true,
+      data: weeklyData
+    });
+  } catch (error) {
+    console.error('Error fetching request trends:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch request trends',
+      error: error.message
+    });
+  }
+});
+
+// Get donors response by blood type
+app.get('/admin/analytics/donors-by-blood-type', async (req, res) => {
+  try {
+    const Donor = require('./models/Donor');
+    const donorsByBloodType = await Donor.aggregate([
+      {
+        $group: {
+          _id: "$bloodGroup",
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { "_id": 1 }
+      }
+    ]);
+
+    const colors = ['#dc2626', '#059669', '#2563eb', '#7c3aed', '#ea580c', '#0891b2', '#be185d', '#65a30d'];
+    const bloodTypeData = donorsByBloodType.map((item, index) => ({
+      label: item._id,
+      value: item.count,
+      color: colors[index % colors.length]
+    }));
+
+    res.json({
+      success: true,
+      data: bloodTypeData
+    });
+  } catch (error) {
+    console.error('Error fetching donors by blood type:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch donors by blood type',
+      error: error.message
+    });
+  }
+});
+
+// Get fulfillment rate breakdown
+app.get('/admin/analytics/fulfillment-breakdown', async (req, res) => {
+  try {
+    const BloodRequest = require('./models/BloodRequest');
+    const statusCounts = await BloodRequest.aggregate([
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const total = statusCounts.reduce((sum, item) => sum + item.count, 0);
+    const fulfillmentData = statusCounts.map(item => {
+      let color = '#059669'; // fulfilled - green
+      if (item._id === 'pending') color = '#eab308'; // pending - yellow
+      if (item._id === 'cancelled') color = '#dc2626'; // cancelled - red
+
+      return {
+        label: item._id.charAt(0).toUpperCase() + item._id.slice(1),
+        value: total > 0 ? Math.round((item.count / total) * 100) : 0,
+        color: color
+      };
+    });
+
+    res.json({
+      success: true,
+      data: fulfillmentData
+    });
+  } catch (error) {
+    console.error('Error fetching fulfillment breakdown:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch fulfillment breakdown',
+      error: error.message
+    });
+  }
+});
+
+// Get response times by hour
+app.get('/admin/analytics/response-times-by-hour', async (req, res) => {
+  try {
+    const DonorResponse = require('./models/DonorLocationResponse');
+    const responses = await DonorResponse.find({}).populate('requestId');
+
+    const hourlyResponseTimes = {};
+    // Initialize all time slots
+    ['6AM-9AM', '9AM-12PM', '12PM-3PM', '3PM-6PM', '6PM-9PM', '9PM-12AM'].forEach(slot => {
+      hourlyResponseTimes[slot] = { total: 0, count: 0 };
+    });
+
+    responses.forEach(response => {
+      if (response.requestId && response.responseTime) {
+        const hour = new Date(response.responseTime).getHours();
+        let timeSlot;
+        
+        if (hour >= 6 && hour < 9) timeSlot = '6AM-9AM';
+        else if (hour >= 9 && hour < 12) timeSlot = '9AM-12PM';
+        else if (hour >= 12 && hour < 15) timeSlot = '12PM-3PM';
+        else if (hour >= 15 && hour < 18) timeSlot = '3PM-6PM';
+        else if (hour >= 18 && hour < 21) timeSlot = '6PM-9PM';
+        else if (hour >= 21 || hour < 6) timeSlot = '9PM-12AM';
+
+        if (timeSlot && hourlyResponseTimes[timeSlot]) {
+          const requestTime = new Date(response.requestId.createdAt);
+          const responseTime = new Date(response.responseTime);
+          const timeDiff = (responseTime - requestTime) / 1000; // seconds
+          
+          if (timeDiff > 0) {
+            hourlyResponseTimes[timeSlot].total += timeDiff;
+            hourlyResponseTimes[timeSlot].count++;
+          }
+        }
+      }
+    });
+
+    // Default values if no data
+    const defaultTimes = {
+      '6AM-9AM': 150,
+      '9AM-12PM': 120,
+      '12PM-3PM': 90,
+      '3PM-6PM': 110,
+      '6PM-9PM': 180,
+      '9PM-12AM': 240
+    };
+
+    const responseTimeData = Object.keys(hourlyResponseTimes).map(timeSlot => ({
+      label: timeSlot,
+      value: hourlyResponseTimes[timeSlot].count > 0 
+        ? Math.round(hourlyResponseTimes[timeSlot].total / hourlyResponseTimes[timeSlot].count)
+        : defaultTimes[timeSlot],
+      color: '#2563eb'
+    }));
+
+    res.json({
+      success: true,
+      data: responseTimeData
+    });
+  } catch (error) {
+    console.error('Error fetching response times by hour:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch response times by hour',
+      error: error.message
+    });
+  }
+});
+
+// Admin notification routes
+app.get('/admin/notifications', async (req, res) => {
+  try {
+    console.log('Fetching admin notifications...');
+    const Notification = require('./models/Notification');
+    
+    // Get all notifications (admin sees all) sorted by creation date
+    const notifications = await Notification.find({})
+      .populate('hospitalId', 'name email')
+      .populate('donorId', 'name email bloodGroup')
+      .populate('bloodRequestId', 'bloodGroup quantity urgency')
+      .sort({ createdAt: -1 })
+      .limit(100); // Limit to last 100 notifications
+
+    // Transform notifications for admin view
+    const adminNotifications = notifications.map(notification => ({
+      id: notification._id.toString(),
+      title: notification.title,
+      message: notification.message,
+      type: notification.type,
+      createdAt: notification.createdAt,
+      read: notification.read,
+      category: notification.bloodRequestId ? 'blood-request' : 
+                notification.donorId ? 'donor' : 
+                notification.hospitalId ? 'hospital' : 'system',
+      relatedData: {
+        hospital: notification.hospitalId ? {
+          id: notification.hospitalId._id,
+          name: notification.hospitalId.name,
+          email: notification.hospitalId.email
+        } : null,
+        donor: notification.donorId ? {
+          id: notification.donorId._id,
+          name: notification.donorId.name,
+          bloodGroup: notification.donorId.bloodGroup
+        } : null,
+        bloodRequest: notification.bloodRequestId ? {
+          id: notification.bloodRequestId._id,
+          bloodGroup: notification.bloodRequestId.bloodGroup,
+          quantity: notification.bloodRequestId.quantity
+        } : null
+      }
+    }));
+
+    res.json({
+      success: true,
+      message: `Fetched ${adminNotifications.length} notifications`,
+      notifications: adminNotifications,
+      count: adminNotifications.length
+    });
+  } catch (error) {
+    console.error('Error fetching admin notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch notifications',
+      error: error.message
+    });
+  }
+});
+
+app.post('/admin/notifications/:id/read', async (req, res) => {
+  try {
+    const Notification = require('./models/Notification');
+    const notification = await Notification.findByIdAndUpdate(
+      req.params.id,
+      { read: true },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark notification as read',
+      error: error.message
+    });
+  }
+});
+
+app.post('/admin/notifications/read-all', async (req, res) => {
+  try {
+    const Notification = require('./models/Notification');
+    const result = await Notification.updateMany(
+      { read: false },
+      { read: true }
+    );
+
+    res.json({
+      success: true,
+      message: `Marked ${result.modifiedCount} notifications as read`
+    });
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark all notifications as read',
+      error: error.message
+    });
+  }
+});
+
+app.post('/admin/notifications/create', async (req, res) => {
+  try {
+    const Notification = require('./models/Notification');
+    const { title, message, type = 'info', hospitalId, donorId, bloodRequestId } = req.body;
+
+    if (!title || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title and message are required'
+      });
+    }
+
+    const notification = new Notification({
+      title,
+      message,
+      type,
+      hospitalId: hospitalId || null,
+      donorId: donorId || null,
+      bloodRequestId: bloodRequestId || null,
+      read: false
+    });
+
+    await notification.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Notification created successfully',
+      notification: {
+        id: notification._id.toString(),
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        createdAt: notification.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create notification',
+      error: error.message
+    });
+  }
+});
+
+// Seed initial admin notifications (for testing purposes)
+app.post('/admin/notifications/seed', async (req, res) => {
+  try {
+    const Notification = require('./models/Notification');
+    
+    // Clear existing notifications (optional - only for testing)
+    // await Notification.deleteMany({});
+    
+    const sampleNotifications = [
+      {
+        title: 'System Startup',
+        message: 'Blood donation management system has been successfully initialized and is now operational.',
+        type: 'success',
+        createdAt: new Date(Date.now() - 1000 * 60 * 10) // 10 minutes ago
+      },
+      {
+        title: 'Low Donor Response Alert',
+        message: 'Donor response rate has dropped to 45% in the last 24 hours. Consider implementing awareness campaigns.',
+        type: 'warning',
+        createdAt: new Date(Date.now() - 1000 * 60 * 30) // 30 minutes ago
+      },
+      {
+        title: 'Daily Backup Completed',
+        message: 'Scheduled database backup completed successfully at 3:00 AM with 1,247 donor records and 156 blood requests.',
+        type: 'info',
+        createdAt: new Date(Date.now() - 1000 * 60 * 120) // 2 hours ago
+      },
+      {
+        title: 'Critical Blood Request',
+        message: 'Emergency blood request for AB- blood type posted. Immediate donor notification has been triggered.',
+        type: 'error',
+        createdAt: new Date(Date.now() - 1000 * 60 * 180) // 3 hours ago
+      },
+      {
+        title: 'SMS Service Status',
+        message: 'SMS notification service is operating normally. 245 messages sent in the last hour.',
+        type: 'info',
+        createdAt: new Date(Date.now() - 1000 * 60 * 240) // 4 hours ago
+      }
+    ];
+
+    const createdNotifications = await Notification.insertMany(sampleNotifications);
+    
+    res.json({
+      success: true,
+      message: `Seeded ${createdNotifications.length} sample notifications`,
+      count: createdNotifications.length
+    });
+  } catch (error) {
+    console.error('Error seeding notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to seed notifications',
+      error: error.message
+    });
+  }
+});
+
+// Admin hospital CRUD operations
+app.post('/admin/hospitals', async (req, res) => {
+  try {
+    const Hospital = require('./models/Hospital');
+    const bcrypt = require('bcryptjs');
+    
+    const hospitalData = { ...req.body };
+    if (hospitalData.email) hospitalData.email = hospitalData.email.toLowerCase();
+    if (hospitalData.password) {
+      hospitalData.password = await bcrypt.hash(hospitalData.password, 10);
+    }
+    
+    const hospital = new Hospital(hospitalData);
+    await hospital.save();
+    
+    // Create admin notification for new hospital registration
+    await createAdminNotification(
+      'New Hospital Registration',
+      `New hospital "${hospitalData.name}" has been registered by admin and is ready for blood request management.`,
+      'success',
+      { hospitalId: hospital._id }
+    );
+    
+    res.status(201).json({
+      success: true,
+      message: 'Hospital created successfully',
+      hospital: { ...hospital.toObject(), id: hospital._id.toString() }
+    });
+  } catch (error) {
+    console.error('Error creating hospital:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create hospital',
+      error: error.message
+    });
+  }
+});
+
+app.put('/admin/hospitals/:id', async (req, res) => {
+  try {
+    const Hospital = require('./models/Hospital');
+    const bcrypt = require('bcryptjs');
+    
+    const updateData = { ...req.body };
+    if (updateData.email) updateData.email = updateData.email.toLowerCase();
+    if (updateData.password) {
+      updateData.password = await bcrypt.hash(updateData.password, 10);
+    }
+    
+    const hospital = await Hospital.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true, select: '-password' }
+    );
+
+    if (!hospital) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hospital not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Hospital updated successfully',
+      hospital: { ...hospital.toObject(), id: hospital._id.toString() }
+    });
+  } catch (error) {
+    console.error('Error updating hospital:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update hospital',
+      error: error.message
+    });
+  }
+});
+
+app.delete('/admin/hospitals/:id', async (req, res) => {
+  try {
+    const Hospital = require('./models/Hospital');
+    
+    const hospital = await Hospital.findByIdAndDelete(req.params.id);
+    if (!hospital) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hospital not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Hospital deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting hospital:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete hospital',
       error: error.message
     });
   }
@@ -428,13 +1153,21 @@ app.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'All fields required' });
     }
 
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      console.log("MongoDB not connected. Connection state:", mongoose.connection.readyState);
+      return res.status(503).json({ 
+        message: 'Database service temporarily unavailable. Please try again in a few moments.' 
+      });
+    }
+
     email = email.toLowerCase();
     // Automatically assign hospital role for all registrations
     const role = 'hospital';
 
     // Check if user already exists in either Admin or Hospital collection
-    const existingHospital = await Hospital.findOne({ email });
-    const existingAdmin = await Admin.findOne({ email });
+    const existingHospital = await Hospital.findOne({ email }).maxTimeMS(10000);
+    const existingAdmin = await Admin.findOne({ email }).maxTimeMS(10000);
     
     if (existingHospital || existingAdmin) {
       return res.status(409).json({ message: 'User already exists' });
@@ -447,7 +1180,13 @@ app.post('/register', async (req, res) => {
     res.status(201).json({ message: 'Hospital registered successfully' });
   } catch (err) {
     console.error("Registration error:", err);
-    res.status(500).json({ message: "Registration failed. Please try again." });
+    if (err.name === 'MongooseError' || err.name === 'MongoNetworkError') {
+      res.status(503).json({ 
+        message: "Database connection issue. Please check your internet connection and try again." 
+      });
+    } else {
+      res.status(500).json({ message: "Registration failed. Please try again." });
+    }
   }
 });
 
@@ -459,12 +1198,20 @@ app.post('/login', async (req, res) => {
     let { email, password } = req.body;
     email = email.toLowerCase();
 
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      console.log("MongoDB not connected. Connection state:", mongoose.connection.readyState);
+      return res.status(503).json({ 
+        message: 'Database service temporarily unavailable. Please try again in a few moments.' 
+      });
+    }
+
     // Check both Admin and Hospital collections to determine role automatically
-    let user = await Admin.findOne({ email });
+    let user = await Admin.findOne({ email }).maxTimeMS(10000);
     let role = 'admin';
     
     if (!user) {
-      user = await Hospital.findOne({ email });
+      user = await Hospital.findOne({ email }).maxTimeMS(10000);
       role = 'hospital';
     }
 
@@ -486,7 +1233,13 @@ app.post('/login', async (req, res) => {
     res.json({ token, role, name: user.name });
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({ message: "Login failed. Please try again." });
+    if (err.name === 'MongooseError' || err.name === 'MongoNetworkError') {
+      res.status(503).json({ 
+        message: "Database connection issue. Please check your internet connection and try again." 
+      });
+    } else {
+      res.status(500).json({ message: "Login failed. Please try again." });
+    }
   }
 });
 

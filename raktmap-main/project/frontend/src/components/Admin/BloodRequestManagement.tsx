@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Heart, Eye, Filter, Calendar, Building2 } from 'lucide-react';
 import { Table } from '../Shared/Table';
 import { Modal } from '../Shared/Modal';
-import { BloodRequest } from '../../types';
+import { BloodRequest, Hospital } from '../../types';
+import axios from '../../utils/axios';
 
 export function BloodRequestManagement() {
   const [searchValue, setSearchValue] = useState('');
@@ -11,56 +12,37 @@ export function BloodRequestManagement() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [selectedRequest, setSelectedRequest] = useState<BloodRequest | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [bloodRequests, setBloodRequests] = useState<BloodRequest[]>([]);
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const bloodRequests: BloodRequest[] = [
-    {
-      id: 'REQ001',
-      hospitalId: '1',
-      bloodGroup: 'O-',
-      quantity: 2,
-      urgency: 'high',
-      status: 'pending',
-      requestedAt: '2024-01-21T10:30:00Z',
-      requiredBy: '2024-01-21T18:00:00Z',
-      description: 'Emergency surgery patient',
-      donorResponses: [
-        { donorId: '1', status: 'contacted', respondedAt: '2024-01-21T10:35:00Z' },
-        { donorId: '2', status: 'confirmed', respondedAt: '2024-01-21T10:45:00Z' }
-      ]
-    },
-    {
-      id: 'REQ002',
-      hospitalId: '2',
-      bloodGroup: 'A+',
-      quantity: 1,
-      urgency: 'medium',
-      status: 'fulfilled',
-      requestedAt: '2024-01-20T14:20:00Z',
-      requiredBy: '2024-01-21T08:00:00Z',
-      description: 'Scheduled surgery',
-      donorResponses: [
-        { donorId: '3', status: 'donated', respondedAt: '2024-01-20T15:30:00Z' }
-      ]
-    },
-    {
-      id: 'REQ003',
-      hospitalId: '1',
-      bloodGroup: 'B+',
-      quantity: 3,
-      urgency: 'low',
-      status: 'cancelled',
-      requestedAt: '2024-01-19T09:15:00Z',
-      requiredBy: '2024-01-20T12:00:00Z',
-      description: 'Patient condition improved',
-      donorResponses: []
-    }
-  ];
-
-  const hospitals = [
-    { id: '1', name: 'City Medical Center' },
-    { id: '2', name: 'General Hospital' },
-    { id: '3', name: 'Emergency Care Center' }
-  ];
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [reqRes, hospRes] = await Promise.all([
+          axios.get('/blood-requests/all'),
+          axios.get('/hospitals/')
+        ]);
+        // Map backend _id to id for frontend compatibility
+        const requests = (reqRes.data.bloodRequests || []).map((r: any) => ({
+          ...r,
+          id: r._id || r.id,
+          donorResponses: r.donorResponses || [],
+          requestedAt: r.createdAt || r.requestedAt
+        }));
+        setBloodRequests(requests);
+        setHospitals(hospRes.data.hospitals || []);
+      } catch (err: any) {
+        setError('Failed to fetch data');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -151,20 +133,32 @@ export function BloodRequestManagement() {
   ];
 
   const filteredRequests = bloodRequests.filter(request => {
-    const matchesSearch = request.id.toLowerCase().includes(searchValue.toLowerCase()) ||
-                         request.bloodGroup.toLowerCase().includes(searchValue.toLowerCase()) ||
-                         getHospitalName(request.hospitalId).toLowerCase().includes(searchValue.toLowerCase());
+    const matchesSearch = request.id?.toLowerCase().includes(searchValue.toLowerCase()) ||
+      request.bloodGroup?.toLowerCase().includes(searchValue.toLowerCase()) ||
+      getHospitalName(request.hospitalId)?.toLowerCase().includes(searchValue.toLowerCase());
     const matchesStatus = !selectedStatus || request.status === selectedStatus;
     const matchesHospital = !selectedHospital || request.hospitalId === selectedHospital;
-    
     let matchesDateRange = true;
     if (dateRange.start && dateRange.end) {
+      // Both from and to are set: filter inclusively
       const requestDate = new Date(request.requestedAt);
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
+      // Set endDate to end of the day for inclusivity
+      endDate.setHours(23, 59, 59, 999);
       matchesDateRange = requestDate >= startDate && requestDate <= endDate;
+    } else if (dateRange.start) {
+      // Only from date is set
+      const requestDate = new Date(request.requestedAt);
+      const startDate = new Date(dateRange.start);
+      matchesDateRange = requestDate >= startDate;
+    } else if (dateRange.end) {
+      // Only to date is set
+      const requestDate = new Date(request.requestedAt);
+      const endDate = new Date(dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      matchesDateRange = requestDate <= endDate;
     }
-    
     return matchesSearch && matchesStatus && matchesHospital && matchesDateRange;
   });
 
@@ -174,6 +168,9 @@ export function BloodRequestManagement() {
     fulfilled: bloodRequests.filter(r => r.status === 'fulfilled').length,
     cancelled: bloodRequests.filter(r => r.status === 'cancelled').length
   };
+
+  if (loading) return <div className="p-8 text-center">Loading blood requests...</div>;
+  if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
 
   return (
     <div className="space-y-6">

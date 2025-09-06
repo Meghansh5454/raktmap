@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Building2, Users, Heart, Activity, TrendingUp, Clock, RefreshCw } from 'lucide-react';
 import { StatsCard } from '../Shared/StatsCard';
 import { Chart } from '../Shared/Chart';
-import axios from 'axios';
+import axios from '../../utils/axios';
 
 export function AdminDashboard() {
   const [stats, setStats] = useState({
@@ -11,6 +11,9 @@ export function AdminDashboard() {
     bloodRequests: 0,
     responseRate: 0
   });
+  const [donors, setDonors] = useState<any[]>([]);
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [bloodRequests, setBloodRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,20 +23,40 @@ export function AdminDashboard() {
       setLoading(true);
       setError(null);
       
-      // Fetch hospitals and donors in parallel
-      const [hospitalsResponse, donorsResponse] = await Promise.all([
-        axios.get('http://localhost:5000/hospitals'),
-        axios.get('http://localhost:5000/donors')
+      // Fetch hospitals, donors, and blood requests in parallel
+      const [hospitalsResponse, donorsResponse, bloodRequestsResponse] = await Promise.all([
+        axios.get('/hospitals'),
+        axios.get('/donors'),
+        axios.get('/blood-requests/all')
       ]);
 
       const hospitals = hospitalsResponse.data.success ? hospitalsResponse.data.hospitals : [];
-      const donors = donorsResponse.data || [];
+      const donorsList = donorsResponse.data || [];
+      const bloodRequestsList = bloodRequestsResponse.data.bloodRequests || [];
+      
+      setDonors(donorsList);
+      setBloodRequests(bloodRequestsList);
+      
+      // Create recent activity from blood requests (most recent first)
+      const activities = bloodRequestsList.slice(0, 4).map((req: any, index: number) => ({
+        id: index + 1,
+        action: `Blood request ${req.status}`,
+        hospital: req.hospitalName || `Hospital ID: ${req.hospitalId}`,
+        request: `${req.quantity} units of ${req.bloodGroup}`,
+        time: new Date(req.createdAt || req.requestedAt).toLocaleDateString()
+      }));
+      setRecentActivity(activities);
+
+      // Calculate response rate from blood requests
+      const totalRequests = bloodRequestsList.length;
+      const fulfilledRequests = bloodRequestsList.filter((req: any) => req.status === 'fulfilled').length;
+      const responseRate = totalRequests > 0 ? Math.round((fulfilledRequests / totalRequests) * 100) : 0;
 
       setStats({
         totalHospitals: hospitals.length,
-        activeDonors: donors.length,
-        bloodRequests: 28, // This would come from blood requests API
-        responseRate: 68 // This would be calculated from donor responses
+        activeDonors: donorsList.length,
+        bloodRequests: totalRequests,
+        responseRate: responseRate
       });
 
     } catch (err: any) {
@@ -48,27 +71,31 @@ export function AdminDashboard() {
     fetchDashboardStats();
   }, []);
 
-  const recentActivity = [
-    { id: 1, action: 'New hospital registered', hospital: 'City Medical Center', time: '2 hours ago' },
-    { id: 2, action: 'Blood request fulfilled', hospital: 'General Hospital', time: '4 hours ago' },
-    { id: 3, action: 'Donor response received', donor: 'John Doe (O+)', time: '6 hours ago' },
-    { id: 4, action: 'SMS sent to 15 donors', request: 'Emergency A- request', time: '8 hours ago' },
-  ];
-
-  const bloodGroupData = [
-    { label: 'O+', value: 245, color: 'bg-red-500' },
-    { label: 'A+', value: 189, color: 'bg-blue-500' },
-    { label: 'B+', value: 156, color: 'bg-green-500' },
-    { label: 'AB+', value: 98, color: 'bg-yellow-500' },
-    { label: 'O-', value: 87, color: 'bg-purple-500' },
-    { label: 'A-', value: 76, color: 'bg-pink-500' },
-    { label: 'B-', value: 65, color: 'bg-indigo-500' },
-    { label: 'AB-', value: 34, color: 'bg-gray-500' },
-  ];
+  // Dynamic blood group chart data
+  const bloodGroupColors: Record<string, string> = {
+    'O+': '#ef4444',   // red-500
+    'A+': '#3b82f6',   // blue-500
+    'B+': '#22c55e',   // green-500
+    'AB+': '#eab308',  // yellow-500
+    'O-': '#a855f7',   // purple-500
+    'A-': '#ec4899',   // pink-500
+    'B-': '#6366f1',   // indigo-500
+    'AB-': '#6b7280',  // gray-500
+  };
+  const bloodGroupCounts: Record<string, number> = {};
+  donors.forEach(donor => {
+    const group = donor.bloodGroup;
+    if (group) bloodGroupCounts[group] = (bloodGroupCounts[group] || 0) + 1;
+  });
+  const bloodGroupData = Object.keys(bloodGroupColors).map(bg => ({
+    label: bg,
+    value: bloodGroupCounts[bg] || 0,
+    color: bloodGroupColors[bg]
+  }));
 
   const responseRateData = [
-    { label: 'Responded', value: 68, color: '#10b981' },
-    { label: 'No Response', value: 32, color: '#ef4444' },
+    { label: 'Responded', value: stats.responseRate, color: '#10b981' },
+    { label: 'No Response', value: 100 - stats.responseRate, color: '#ef4444' },
   ];
 
   return (

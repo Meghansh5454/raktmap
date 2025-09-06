@@ -6,7 +6,8 @@ export interface User {
 }
 
 export interface Hospital {
-  id: string;
+  _id: string;
+  id?: string; // For backwards compatibility
   name: string;
   email: string;
   phone: string;

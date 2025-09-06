@@ -3,7 +3,7 @@ import { Users, Download, Eye, Edit, Trash2, RefreshCw, XCircle, Upload } from '
 import { Table } from '../Shared/Table';
 import { Modal } from '../Shared/Modal';
 import { Donor } from '../../types';
-import axios from 'axios';
+import axios from '../../utils/axios';
 
 export function DonorManagement() {
   const [searchValue, setSearchValue] = useState('');
@@ -34,7 +34,7 @@ export function DonorManagement() {
       setLoading(true);
       setError(null);
       console.log('Fetching donors from database...');
-      const response = await axios.get('http://localhost:5000/admin/donors');
+      const response = await axios.get('/admin/donors');
       if (response.data.success) {
         setDonors(response.data.donors);
         console.log('Fetched donors:', response.data.donors.length);
@@ -85,10 +85,7 @@ export function DonorManagement() {
     if (!selectedDonor) return;
     
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.put(`http://localhost:5000/donors/${selectedDonor._id}`, formData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await axios.put(`/admin/donors/${selectedDonor._id}`, formData);
       if (response.data.success) {
         await fetchDonors();
         setIsModalOpen(false);
@@ -105,10 +102,7 @@ export function DonorManagement() {
     if (!confirm('Are you sure you want to delete this donor?')) return;
     
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.delete(`http://localhost:5000/donors/${donorId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await axios.delete(`/admin/donors/${donorId}`);
       if (response.data.success) {
         await fetchDonors();
       }
@@ -321,7 +315,7 @@ export function DonorManagement() {
       const rows = parseCSV(text);
       if (!rows.length) throw new Error('No data rows found');
       // Send to backend
-      const response = await axios.post('http://localhost:5000/admin/donors/import', { donors: rows }, { headers: { 'Content-Type': 'application/json' }});
+      const response = await axios.post('/admin/donors/import', { donors: rows }, { headers: { 'Content-Type': 'application/json' }});
       setImportSummary(response.data);
       await fetchDonors();
     } catch (err: any) {
